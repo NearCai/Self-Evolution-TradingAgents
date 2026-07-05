@@ -79,7 +79,10 @@ def test_china_ohlcv_vendor_chain_prefers_tushare_only_when_configured(monkeypat
 
 
 @pytest.mark.unit
-def test_china_stock_data_uses_local_vendor(monkeypatch):
+def test_china_stock_data_uses_local_vendor(monkeypatch, tmp_path):
+    set_config({"data_cache_dir": str(tmp_path)})
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    monkeypatch.delenv("TUSHARE_API_KEY", raising=False)
     monkeypatch.setattr(china, "_fetch_akshare_ohlcv", lambda *a, **k: _sample_ohlcv("AKShare unit"))
 
     out = china.get_china_stock_data("600519.SS", "2025-06-03", "2025-06-05")
@@ -88,6 +91,56 @@ def test_china_stock_data_uses_local_vendor(monkeypatch):
     assert "Source: AKShare unit" in out
     assert "2025-06-05" in out
     assert "11.2" in out
+
+
+@pytest.mark.unit
+def test_china_ohlcv_cache_reuses_successful_fetch(monkeypatch, tmp_path):
+    set_config({"data_cache_dir": str(tmp_path)})
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    monkeypatch.delenv("TUSHARE_API_KEY", raising=False)
+    calls = []
+
+    def fetch_akshare(*args, **kwargs):
+        calls.append(args)
+        return _sample_ohlcv("AKShare unit")
+
+    monkeypatch.setattr(china, "_fetch_akshare_ohlcv", fetch_akshare)
+    first = china.load_china_ohlcv_range("600519.SS", "2025-06-03", "2025-06-05")
+
+    assert first.attrs["source"] == "AKShare unit"
+    assert len(calls) == 1
+
+    def fail_live_fetch(*args, **kwargs):
+        raise AssertionError("complete cache hit should not call live vendors")
+
+    monkeypatch.setattr(china, "_fetch_akshare_ohlcv", fail_live_fetch)
+    monkeypatch.setattr(china, "_fetch_baostock_ohlcv", fail_live_fetch)
+
+    second = china.load_china_ohlcv_range("600519.SS", "2025-06-03", "2025-06-05")
+
+    assert list(second["Close"]) == [10.6, 10.9, 11.2]
+    assert "China OHLCV cache (600519.SH)" == second.attrs["source"]
+
+
+@pytest.mark.unit
+def test_china_ohlcv_cache_falls_back_to_partial_rows(monkeypatch, tmp_path):
+    set_config({"data_cache_dir": str(tmp_path)})
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    monkeypatch.delenv("TUSHARE_API_KEY", raising=False)
+    monkeypatch.setattr(china, "_fetch_akshare_ohlcv", lambda *a, **k: _sample_ohlcv("AKShare unit"))
+
+    china.load_china_ohlcv_range("600519.SS", "2025-06-03", "2025-06-05")
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("network unavailable")
+
+    monkeypatch.setattr(china, "_fetch_akshare_ohlcv", unavailable)
+    monkeypatch.setattr(china, "_fetch_baostock_ohlcv", unavailable)
+
+    fallback = china.load_china_ohlcv_range("600519.SS", "2025-06-04", "2025-06-10")
+
+    assert list(fallback["Date"].dt.strftime("%Y-%m-%d")) == ["2025-06-04", "2025-06-05"]
+    assert "partial fallback" in fallback.attrs["source"]
 
 
 @pytest.mark.unit

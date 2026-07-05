@@ -21,6 +21,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
@@ -31,6 +32,11 @@ from .config import get_config
 from .errors import NoMarketDataError, VendorNotConfiguredError
 
 logger = logging.getLogger(__name__)
+
+_CACHE_COLUMNS = [
+    "Date", "Open", "High", "Low", "Close", "Volume", "Amount",
+    "PctChange", "Turnover", "PE_TTM", "PB_MRQ", "PS_TTM", "PCF_NCF_TTM",
+]
 
 
 _SH_PREFIXES = ("600", "601", "603", "605", "688", "689")
@@ -427,6 +433,164 @@ def _filter_ohlcv(df: pd.DataFrame, start_date: str, end_date: str) -> pd.DataFr
     return out
 
 
+def _china_ohlcv_cache_dir() -> Path:
+    path = Path(get_config()["data_cache_dir"]) / "china_ohlcv"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _china_ohlcv_cache_key(symbol: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", symbol.upper()).strip("_")
+
+
+def _china_ohlcv_cache_path(symbol: str) -> Path:
+    return _china_ohlcv_cache_dir() / f"{_china_ohlcv_cache_key(symbol)}.csv"
+
+
+def _normalize_cached_ohlcv(raw: pd.DataFrame, symbol: str) -> pd.DataFrame | None:
+    if raw is None or raw.empty or "Date" not in raw.columns or "Close" not in raw.columns:
+        return None
+
+    df = raw.copy()
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    for col in _CACHE_COLUMNS:
+        if col != "Date" and col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["Date", "Close"]).sort_values("Date")
+    keep = [col for col in _CACHE_COLUMNS if col in df.columns]
+    if not keep or "Close" not in keep:
+        return None
+    df = df[keep].reset_index(drop=True)
+    if df.empty:
+        return None
+    df.attrs["source"] = f"China OHLCV cache ({symbol})"
+    return df
+
+
+def _read_ohlcv_cache(symbol: str) -> pd.DataFrame | None:
+    path = _china_ohlcv_cache_path(symbol)
+    if not path.exists():
+        return None
+    try:
+        return _normalize_cached_ohlcv(pd.read_csv(path), symbol)
+    except Exception as exc:  # noqa: BLE001 - corrupt cache should not break live fetch
+        logger.debug("Failed to read China OHLCV cache %s: %s", path, exc)
+        return None
+
+
+def _write_ohlcv_cache(symbol: str, fresh: pd.DataFrame) -> None:
+    normalized = _normalize_cached_ohlcv(fresh, symbol)
+    if normalized is None:
+        return
+
+    existing = _read_ohlcv_cache(symbol)
+    frames = [frame for frame in (existing, normalized) if frame is not None and not frame.empty]
+    if not frames:
+        return
+
+    combined = pd.concat(frames, ignore_index=True)
+    for col in _CACHE_COLUMNS:
+        if col not in combined.columns:
+            combined[col] = pd.NA
+    combined = combined[_CACHE_COLUMNS]
+    combined["Date"] = pd.to_datetime(combined["Date"], errors="coerce")
+    combined = (
+        combined.dropna(subset=["Date", "Close"])
+        .drop_duplicates(subset=["Date"], keep="last")
+        .sort_values("Date")
+        .reset_index(drop=True)
+    )
+    combined["Date"] = combined["Date"].dt.strftime("%Y-%m-%d")
+
+    path = _china_ohlcv_cache_path(symbol)
+    try:
+        combined.to_csv(path, index=False)
+    except Exception as exc:  # noqa: BLE001 - cache write is an optimization
+        logger.debug("Failed to write China OHLCV cache %s: %s", path, exc)
+
+
+def _cached_ohlcv_slice(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    *,
+    require_full: bool,
+    fallback: bool = False,
+) -> pd.DataFrame | None:
+    cached = _read_ohlcv_cache(symbol)
+    if cached is None:
+        return None
+    try:
+        out = _filter_ohlcv(cached, start_date, end_date)
+    except NoMarketDataError:
+        return None
+
+    if require_full:
+        dates = out["Date"].dropna()
+        if dates.empty:
+            return None
+        start = _date(start_date)
+        end = _date(end_date)
+        # Weekend boundaries have no trading rows; weekdays should be covered
+        # exactly so a daily backtest does not silently reuse yesterday's cache.
+        boundary_slack = pd.Timedelta(days=3)
+        start_ok = dates.min() <= (start if start.weekday() < 5 else start + boundary_slack)
+        end_ok = dates.max() >= (end if end.weekday() < 5 else end - boundary_slack)
+        if not start_ok or not end_ok:
+            return None
+
+    if fallback:
+        out.attrs["source"] = f"China OHLCV cache ({symbol}; partial fallback after live vendors failed)"
+    else:
+        out.attrs["source"] = f"China OHLCV cache ({symbol})"
+    return out
+
+
+def _load_ohlcv_range_with_cache(
+    request_symbol: str,
+    cache_symbol: str,
+    start_date: str,
+    end_date: str,
+    attempts,
+) -> pd.DataFrame:
+    cached = _cached_ohlcv_slice(cache_symbol, start_date, end_date, require_full=True)
+    if cached is not None:
+        return cached
+
+    errors: list[str] = []
+    for name, fetcher in attempts:
+        try:
+            data = fetcher()
+            _write_ohlcv_cache(cache_symbol, data)
+            return data
+        except VendorNotConfiguredError as exc:
+            errors.append(f"{name}: {exc}")
+            continue
+        except NoMarketDataError as exc:
+            errors.append(f"{name}: {exc.detail or exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001 - next local vendor may work
+            logger.debug("%s failed for %s: %s", name, cache_symbol, exc)
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+            continue
+
+    fallback = _cached_ohlcv_slice(
+        cache_symbol,
+        start_date,
+        end_date,
+        require_full=False,
+        fallback=True,
+    )
+    if fallback is not None:
+        logger.warning(
+            "Using partial China OHLCV cache for %s after live vendors failed: %s",
+            cache_symbol,
+            "; ".join(errors),
+        )
+        return fallback
+    raise NoMarketDataError(request_symbol, cache_symbol, "; ".join(errors))
+
+
 def _fetch_akshare_ohlcv(symbol: AShareSymbol, start_date: str, end_date: str) -> pd.DataFrame:
     ak = _import_akshare()
     raw = ak.stock_zh_a_hist(
@@ -522,24 +686,16 @@ def _load_china_index_ohlcv_range(symbol: str, start_date: str, end_date: str) -
     parsed = parse_china_index_symbol(symbol)
     if parsed is None:
         raise NoMarketDataError(symbol, symbol, "not a supported China index symbol")
-    errors: list[str] = []
-    for name, fetcher in (
-        ("AKShare index", _fetch_akshare_index_ohlcv),
-        ("BaoStock index", _fetch_baostock_index_ohlcv),
-    ):
-        try:
-            return fetcher(parsed, start_date, end_date)
-        except VendorNotConfiguredError as exc:
-            errors.append(f"{name}: {exc}")
-            continue
-        except NoMarketDataError as exc:
-            errors.append(f"{name}: {exc.detail or exc}")
-            continue
-        except Exception as exc:  # noqa: BLE001 - next local vendor may work
-            logger.debug("%s failed for %s: %s", name, parsed.display, exc)
-            errors.append(f"{name}: {type(exc).__name__}: {exc}")
-            continue
-    raise NoMarketDataError(symbol, parsed.display, "; ".join(errors))
+    return _load_ohlcv_range_with_cache(
+        symbol,
+        parsed.display,
+        start_date,
+        end_date,
+        (
+            ("AKShare index", lambda: _fetch_akshare_index_ohlcv(parsed, start_date, end_date)),
+            ("BaoStock index", lambda: _fetch_baostock_index_ohlcv(parsed, start_date, end_date)),
+        ),
+    )
 
 
 def china_ohlcv_vendor_chain() -> tuple[str, ...]:
@@ -559,27 +715,21 @@ def load_china_ohlcv_range(symbol: str, start_date: str, end_date: str) -> pd.Da
     if is_china_index_symbol(symbol):
         return _load_china_index_ohlcv_range(symbol, start_date, end_date)
     parsed = _require_a_share(symbol)
-    errors: list[str] = []
     fetchers = {
         "Tushare": _fetch_tushare_ohlcv,
         "AKShare": _fetch_akshare_ohlcv,
         "BaoStock": _fetch_baostock_ohlcv,
     }
-    for name in china_ohlcv_vendor_chain():
-        fetcher = fetchers[name]
-        try:
-            return fetcher(parsed, start_date, end_date)
-        except VendorNotConfiguredError as exc:
-            errors.append(f"{name}: {exc}")
-            continue
-        except NoMarketDataError as exc:
-            errors.append(f"{name}: {exc.detail or exc}")
-            continue
-        except Exception as exc:  # noqa: BLE001 - next local vendor may work
-            logger.debug("%s failed for %s: %s", name, parsed.display, exc)
-            errors.append(f"{name}: {type(exc).__name__}: {exc}")
-            continue
-    raise NoMarketDataError(symbol, parsed.display, "; ".join(errors))
+    return _load_ohlcv_range_with_cache(
+        symbol,
+        parsed.display,
+        start_date,
+        end_date,
+        tuple(
+            (name, lambda fetcher=fetchers[name]: fetcher(parsed, start_date, end_date))
+            for name in china_ohlcv_vendor_chain()
+        ),
+    )
 
 
 def load_china_ohlcv(symbol: str, curr_date: str, lookback_days: int = 365 * 5) -> pd.DataFrame:
@@ -730,7 +880,7 @@ def _fetch_akshare_static_info(symbol: AShareSymbol) -> dict[str, str]:
 def _latest_baostock_valuation(symbol: AShareSymbol, curr_date: str | None) -> dict[str, str]:
     end = _date(curr_date)
     start = end - pd.Timedelta(days=30)
-    data = _fetch_baostock_ohlcv(symbol, _ymd(start), _ymd(end))
+    data = load_china_ohlcv_range(symbol.display, _ymd(start), _ymd(end))
     row = data.iloc[-1]
     return {
         "Valuation Date": _ymd(row["Date"]),
