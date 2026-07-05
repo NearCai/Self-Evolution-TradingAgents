@@ -40,6 +40,7 @@ __all__ = [
     "get_prediction_markets",
     "get_verified_market_snapshot",
     "build_instrument_context",
+    "bind_tools_compat",
     "resolve_instrument_identity",
     "get_instrument_context_from_state",
     "get_language_instruction",
@@ -63,6 +64,25 @@ def get_language_instruction() -> str:
     if lang.strip().lower() == "english":
         return ""
     return f" Write your entire response in {lang}."
+
+
+def bind_tools_compat(llm, tools):
+    """Bind tools with a conservative one-tool-call-at-a-time policy.
+
+    Several OpenAI-compatible providers accept tool-calling but are fragile
+    when the model emits parallel tool calls: a later request can fail with
+    "assistant message with tool_calls must be followed by tool messages" if
+    any tool-call response is missing or rejected by the provider. Disabling
+    parallel tool calls keeps the same agent workflow while making the message
+    history easier for third-party APIs to validate.
+
+    Non-OpenAI chat models may not expose ``parallel_tool_calls``; fall back to
+    their regular binding path in that case.
+    """
+    try:
+        return llm.bind_tools(tools, parallel_tool_calls=False)
+    except TypeError:
+        return llm.bind_tools(tools)
 
 
 def _clean_identity_value(value: Any) -> str | None:
@@ -220,5 +240,4 @@ def create_msg_delete():
         return {"messages": removal_operations + [placeholder]}
 
     return delete_messages
-
 
