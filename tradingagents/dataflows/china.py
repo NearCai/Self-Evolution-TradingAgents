@@ -2,10 +2,10 @@
 
 This module keeps the original TradingAgents dataflow shape while adding a
 lightweight China vendor for A-share experiments. It uses optional local data
-packages in this order:
+packages in a China-oriented fallback chain:
 
-1. AKShare for Eastmoney OHLCV, financial statements, news, and comment scores.
-2. Tushare when installed and configured with ``TUSHARE_TOKEN``.
+1. Tushare first when ``TUSHARE_TOKEN``/``TUSHARE_API_KEY`` is configured.
+2. AKShare for Eastmoney OHLCV, financial statements, news, and comment scores.
 3. BaoStock for stable historical OHLCV, valuation, and financial ratios.
 
 All historical paths filter rows by the requested trade date before formatting
@@ -143,6 +143,35 @@ def parse_china_index_symbol(symbol: str) -> ChinaIndexSymbol | None:
 
 def is_china_index_symbol(symbol: str) -> bool:
     return parse_china_index_symbol(symbol) is not None
+
+
+def resolve_china_benchmark(symbol: str) -> str | None:
+    """Return the A-share benchmark index for ``symbol``.
+
+    The suffix-only default config maps every ``.SZ`` ticker to the Shenzhen
+    Component Index. For board-aware A-share experiments we can be a little more
+    precise without adding the heavy CN project stack:
+
+    - Shanghai Main/STAR -> SSE Composite (000001.SS)
+    - Shenzhen Main/SME -> SZSE Component (399001.SZ)
+    - ChiNext (300/301) -> ChiNext Index (399006.SZ)
+    """
+    if is_china_index_symbol(symbol):
+        parsed_index = parse_china_index_symbol(symbol)
+        return parsed_index.display if parsed_index is not None else None
+
+    parsed = parse_a_share_symbol(symbol)
+    if parsed is None:
+        return None
+    if parsed.market == "sh":
+        return "000001.SS"
+    if parsed.market == "sz":
+        if parsed.code.startswith(("300", "301")):
+            return "399006.SZ"
+        return "399001.SZ"
+    if parsed.market == "bj":
+        return "000001.SS"
+    return None
 
 
 def _infer_market(code: str) -> str | None:
@@ -319,7 +348,11 @@ def _quiet_call(func, *args, **kwargs):
         return func(*args, **kwargs)
 
 
-def _normalize_ohlcv(raw: pd.DataFrame, source: str, symbol: AShareSymbol) -> pd.DataFrame:
+def _normalize_ohlcv(
+    raw: pd.DataFrame,
+    source: str,
+    symbol: AShareSymbol | ChinaIndexSymbol,
+) -> pd.DataFrame:
     if raw is None or raw.empty:
         raise NoMarketDataError(symbol.display, symbol.display, f"{source} returned no rows")
 
@@ -509,16 +542,31 @@ def _load_china_index_ohlcv_range(symbol: str, start_date: str, end_date: str) -
     raise NoMarketDataError(symbol, parsed.display, "; ".join(errors))
 
 
+def china_ohlcv_vendor_chain() -> tuple[str, ...]:
+    """Return the configured China OHLCV vendor chain.
+
+    This mirrors the useful part of TradingAgents-CN's A-share design while
+    staying lightweight. Tushare is preferred only when a token is present;
+    otherwise we avoid an avoidable failed Tushare probe on every call.
+    """
+    has_tushare_token = bool(os.getenv("TUSHARE_TOKEN") or os.getenv("TUSHARE_API_KEY"))
+    if has_tushare_token:
+        return ("Tushare", "AKShare", "BaoStock")
+    return ("AKShare", "BaoStock")
+
+
 def load_china_ohlcv_range(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     if is_china_index_symbol(symbol):
         return _load_china_index_ohlcv_range(symbol, start_date, end_date)
     parsed = _require_a_share(symbol)
     errors: list[str] = []
-    for name, fetcher in (
-        ("AKShare", _fetch_akshare_ohlcv),
-        ("Tushare", _fetch_tushare_ohlcv),
-        ("BaoStock", _fetch_baostock_ohlcv),
-    ):
+    fetchers = {
+        "Tushare": _fetch_tushare_ohlcv,
+        "AKShare": _fetch_akshare_ohlcv,
+        "BaoStock": _fetch_baostock_ohlcv,
+    }
+    for name in china_ohlcv_vendor_chain():
+        fetcher = fetchers[name]
         try:
             return fetcher(parsed, start_date, end_date)
         except VendorNotConfiguredError as exc:

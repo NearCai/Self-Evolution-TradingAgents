@@ -60,6 +60,25 @@ def test_china_index_symbols_are_not_treated_as_stocks():
 
 
 @pytest.mark.unit
+def test_china_benchmark_resolution_is_board_aware():
+    assert china.resolve_china_benchmark("600519.SS") == "000001.SS"
+    assert china.resolve_china_benchmark("688981.SS") == "000001.SS"
+    assert china.resolve_china_benchmark("000333.SZ") == "399001.SZ"
+    assert china.resolve_china_benchmark("300750.SZ") == "399006.SZ"
+    assert china.resolve_china_benchmark("AAPL") is None
+
+
+@pytest.mark.unit
+def test_china_ohlcv_vendor_chain_prefers_tushare_only_when_configured(monkeypatch):
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    monkeypatch.delenv("TUSHARE_API_KEY", raising=False)
+    assert china.china_ohlcv_vendor_chain() == ("AKShare", "BaoStock")
+
+    monkeypatch.setenv("TUSHARE_TOKEN", "token")
+    assert china.china_ohlcv_vendor_chain() == ("Tushare", "AKShare", "BaoStock")
+
+
+@pytest.mark.unit
 def test_china_stock_data_uses_local_vendor(monkeypatch):
     monkeypatch.setattr(china, "_fetch_akshare_ohlcv", lambda *a, **k: _sample_ohlcv("AKShare unit"))
 

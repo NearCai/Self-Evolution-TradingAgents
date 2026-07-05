@@ -214,6 +214,14 @@ class TradingAgentsGraph:
         explicit = self.config.get("benchmark_ticker")
         if explicit:
             return explicit
+        try:
+            from tradingagents.dataflows.china import resolve_china_benchmark
+
+            china_benchmark = resolve_china_benchmark(ticker)
+            if china_benchmark:
+                return china_benchmark
+        except Exception:  # noqa: BLE001 - benchmark map remains the fallback
+            pass
         benchmark_map = self.config.get("benchmark_map", {})
         ticker_upper = ticker.upper()
         for suffix, benchmark in benchmark_map.items():

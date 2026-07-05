@@ -19,6 +19,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import math
@@ -38,6 +39,7 @@ from tradingagents.dataflows.china import (
     is_a_share_symbol,
     is_china_index_symbol,
     load_china_ohlcv_range,
+    resolve_china_benchmark,
 )
 from tradingagents.dataflows.symbol_utils import normalize_symbol
 from tradingagents.dataflows.utils import safe_ticker_component
@@ -79,6 +81,14 @@ DEFAULT_UNIVERSE = [
 
 DEFAULT_START_DATE = "2026-06-01"
 DEFAULT_END_DATE = "2026-06-30"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+A_SHARE_DATA_VENDOR_CONFIG = {
+    "core_stock_apis": "china",
+    "technical_indicators": "china",
+    "fundamental_data": "china",
+    "news_data": "china",
+}
 
 ACTION_RE = re.compile(r"\*\*Action\*\*\s*:\s*([A-Za-z]+)", re.IGNORECASE)
 PROPOSAL_RE = re.compile(r"FINAL TRANSACTION PROPOSAL:\s*\**([A-Za-z]+)\**", re.IGNORECASE)
@@ -103,11 +113,13 @@ class DecisionRow:
     position_after: float | None = None
     close: float | None = None
     next_close: float | None = None
+    price_source: str | None = None
     stock_return_next: float | None = None
     strategy_return_next: float | None = None
     benchmark: str | None = None
     benchmark_close: float | None = None
     benchmark_next_close: float | None = None
+    benchmark_price_source: str | None = None
     benchmark_return_next: float | None = None
     transaction_cost: float | None = None
     equity_after: float | None = None
@@ -130,13 +142,16 @@ def parse_csv_arg(raw: str | None, default: Iterable[str]) -> list[str]:
 
 def default_output_dir(start_date: str = DEFAULT_START_DATE) -> Path:
     month = start_date[:7].replace("-", "_")
-    return Path(DEFAULT_CONFIG["results_dir"]) / f"continuous_ashare_{month}"
+    return PROJECT_ROOT / "results" / f"continuous_ashare_{month}"
 
 
 def resolve_benchmark(ticker: str, config: dict) -> str:
     explicit = config.get("benchmark_ticker")
     if explicit:
         return explicit
+    china_benchmark = resolve_china_benchmark(ticker)
+    if china_benchmark:
+        return china_benchmark
     benchmark_map = config.get("benchmark_map", {})
     upper = ticker.upper()
     for suffix, benchmark in benchmark_map.items():
@@ -148,20 +163,28 @@ def resolve_benchmark(ticker: str, config: dict) -> str:
 def history_with_retry(ticker: str, start: str, end: str, retries: int = 2):
     last = None
     if is_a_share_symbol(ticker) or is_china_index_symbol(ticker):
-        try:
-            end_inclusive = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-            data = load_china_ohlcv_range(ticker, start, end_inclusive)
-            if len(data) > 0:
-                return data.set_index("Date")
-            last = "empty China A-share history"
-        except Exception as exc:
-            last = str(exc)
+        for attempt in range(retries + 1):
+            try:
+                end_inclusive = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                data = load_china_ohlcv_range(ticker, start, end_inclusive)
+                if len(data) > 0:
+                    source = data.attrs.get("source", "China")
+                    indexed = data.set_index("Date")
+                    indexed.attrs["source"] = source
+                    return indexed
+                last = "empty China A-share history"
+            except Exception as exc:
+                last = str(exc)
+            if attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"{ticker}: {last}")
 
     canonical = normalize_symbol(ticker)
     for attempt in range(retries + 1):
         try:
             data = yf.Ticker(canonical).history(start=start, end=end, auto_adjust=False)
             if len(data) > 0:
+                data.attrs["source"] = f"Yahoo Finance ({canonical})"
                 return data
             last = "empty history"
         except Exception as exc:
@@ -169,6 +192,10 @@ def history_with_retry(ticker: str, start: str, end: str, retries: int = 2):
         if attempt < retries:
             time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f"{ticker}: {last}")
+
+
+def history_source(data) -> str:
+    return str(getattr(data, "attrs", {}).get("source") or "unknown")
 
 
 def normalize_history_index(data) -> dict[str, float]:
@@ -246,6 +273,40 @@ def load_decisions(jsonl_path: Path) -> list[DecisionRow]:
             if line.strip():
                 rows.append(DecisionRow(**json.loads(line)))
     return rows
+
+
+def decision_key(row: DecisionRow) -> tuple[str, str, str]:
+    return (row.ticker, row.analysis_date, row.analysts)
+
+
+def latest_decision_rows(rows: list[DecisionRow]) -> list[DecisionRow]:
+    latest: dict[tuple[str, str, str], DecisionRow] = {}
+    for row in rows:
+        latest[decision_key(row)] = row
+    return sorted(latest.values(), key=lambda r: (r.analysis_date, r.ticker, r.analysts))
+
+
+def build_backtest_config(
+    output_dir: Path,
+    memory_mode: str,
+    memory_holding_days: int,
+    benchmark_ticker: str | None = None,
+) -> dict:
+    base_config = copy.deepcopy(DEFAULT_CONFIG)
+    base_config["results_dir"] = str(output_dir / "_graph_logs")
+    base_config["memory_lookahead_safe"] = True
+    base_config["memory_outcome_holding_days"] = memory_holding_days
+    base_config["benchmark_ticker"] = benchmark_ticker
+
+    data_vendors = dict(base_config.get("data_vendors", {}))
+    data_vendors.update(A_SHARE_DATA_VENDOR_CONFIG)
+    base_config["data_vendors"] = data_vendors
+
+    if memory_mode == "experiment":
+        base_config["memory_log_path"] = str(output_dir / "_memory" / "continuous_memory.md")
+    elif memory_mode == "none":
+        base_config["memory_log_path"] = None
+    return base_config
 
 
 def run_agent_decision(
@@ -493,9 +554,13 @@ def main() -> int:
                         help="experiment=one shared run memory; native=default project memory; none=disable memory log.")
     parser.add_argument("--memory-holding-days", type=int, default=5,
                         help="Outcome window used by TradingAgents reflection memory.")
+    parser.add_argument("--benchmark-ticker", default=None,
+                        help="Optional single benchmark override. Default uses A-share board-aware benchmarks.")
     parser.add_argument("--allow-short", action="store_true", help="Map Sell to -1. Default is long/cash for A-shares.")
     parser.add_argument("--transaction-cost-bps", type=float, default=0.0,
                         help="One-way transaction cost in basis points applied to turnover.")
+    parser.add_argument("--max-runs", type=int, default=None,
+                        help="Stop after this many new agent calls; useful for smoke/resume validation.")
     parser.add_argument("--force", action="store_true", help="Re-run completed ticker/date rows.")
     parser.add_argument("--debug", action="store_true", help="Stream graph messages; verbose and slower.")
     parser.add_argument("--dry-run", action="store_true", help="Print the experiment grid without calling LLMs.")
@@ -522,26 +587,30 @@ def main() -> int:
     if len(dates) < 2:
         raise RuntimeError(f"Need at least 2 trading dates between {args.start_date} and {args.end_date}.")
 
-    base_config = DEFAULT_CONFIG.copy()
-    base_config["results_dir"] = str(output_dir / "_graph_logs")
-    base_config["memory_lookahead_safe"] = True
-    base_config["memory_outcome_holding_days"] = args.memory_holding_days
-    if args.memory_mode == "experiment":
-        base_config["memory_log_path"] = str(output_dir / "_memory" / "continuous_memory.md")
-    elif args.memory_mode == "none":
-        base_config["memory_log_path"] = None
+    base_config = build_backtest_config(
+        output_dir=output_dir,
+        memory_mode=args.memory_mode,
+        memory_holding_days=args.memory_holding_days,
+        benchmark_ticker=args.benchmark_ticker,
+    )
 
     price_end = (datetime.strptime(args.end_date, "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
     prices: dict[str, dict[str, float]] = {}
+    price_sources: dict[str, str] = {}
     benchmarks: dict[str, str] = {}
     benchmark_prices: dict[str, dict[str, float]] = {}
+    benchmark_price_sources: dict[str, str] = {}
     for item in universe:
         ticker = item["ticker"]
         benchmark = resolve_benchmark(ticker, base_config)
         benchmarks[ticker] = benchmark
-        prices[ticker] = normalize_history_index(history_with_retry(ticker, args.start_date, price_end))
+        ticker_history = history_with_retry(ticker, args.start_date, price_end)
+        prices[ticker] = normalize_history_index(ticker_history)
+        price_sources[ticker] = history_source(ticker_history)
         if benchmark not in benchmark_prices:
-            benchmark_prices[benchmark] = normalize_history_index(history_with_retry(benchmark, args.start_date, price_end))
+            benchmark_history = history_with_retry(benchmark, args.start_date, price_end)
+            benchmark_prices[benchmark] = normalize_history_index(benchmark_history)
+            benchmark_price_sources[benchmark] = history_source(benchmark_history)
 
     print("Continuous A-share backtest")
     print("Provider:", base_config["llm_provider"])
@@ -551,36 +620,50 @@ def main() -> int:
     print("Dates:", f"{args.start_date} to {args.end_date}")
     print("Trading dates:", len(dates), "| Decision dates:", len(decision_dates))
     print("Runs:", len(universe) * len(decision_dates))
+    if args.max_runs is not None:
+        print("Run cap:", args.max_runs)
     print("Output:", output_dir)
     print("Memory mode:", args.memory_mode)
     print("Memory log:", base_config.get("memory_log_path"))
     print("Memory look-ahead safe:", base_config["memory_lookahead_safe"])
+    print("Data vendors:", base_config["data_vendors"])
+    print("Benchmark policy:", args.benchmark_ticker or "A-share board-aware")
     print("Execution policy:", "long/short" if args.allow_short else "long/cash")
     print("Transaction cost bps:", args.transaction_cost_bps)
     print()
     for item in universe:
-        print(f"- {item['ticker']:10s} | {item.get('board', ''):14s} | {item.get('sector', '')}")
+        ticker = item["ticker"]
+        benchmark = benchmarks[ticker]
+        print(
+            f"- {ticker:10s} | {item.get('board', ''):14s} | {item.get('sector', '')} "
+            f"| benchmark={benchmark} | price={price_sources.get(ticker, 'unknown')}"
+        )
     print("First decision dates:", ", ".join(decision_dates[:5]))
     print("Last decision dates:", ", ".join(decision_dates[-5:]))
 
     if args.dry_run:
         return 0
 
-    existing_rows = load_decisions(jsonl_path)
+    existing_rows = latest_decision_rows(load_decisions(jsonl_path))
     completed = {
-        (row.ticker, row.analysis_date, row.analysts): row
+        decision_key(row): row
         for row in existing_rows
-        if row.status == "ok"
+        if row.status == "ok" and row.strategy_return_next is not None
     }
     positions = {item["ticker"]: 0.0 for item in universe}
     equities = {item["ticker"]: 1.0 for item in universe}
     buy_hold_equities = {item["ticker"]: 1.0 for item in universe}
     benchmark_equities = {item["ticker"]: 1.0 for item in universe}
     transaction_cost_rate = args.transaction_cost_bps / 10000.0
+    new_runs = 0
+    stop_requested = False
 
     for date_index, date in enumerate(decision_dates):
         next_date = dates[date_index + 1]
         for item in universe:
+            if args.max_runs is not None and new_runs >= args.max_runs:
+                stop_requested = True
+                break
             ticker = item["ticker"]
             analyst_key = ",".join(analysts)
             key = (ticker, date, analyst_key)
@@ -595,6 +678,7 @@ def main() -> int:
 
             print(f"[run] {ticker} {date} -> {next_date} analysts={analyst_key}")
             row, _ = run_agent_decision(item, date, next_date, analysts, output_dir, base_config, args.debug)
+            new_runs += 1
 
             close = prices[ticker].get(date)
             next_close = prices[ticker].get(next_date)
@@ -605,8 +689,10 @@ def main() -> int:
             row.benchmark = benchmark
             row.close = close
             row.next_close = next_close
+            row.price_source = price_sources.get(ticker)
             row.benchmark_close = benchmark_close
             row.benchmark_next_close = benchmark_next_close
+            row.benchmark_price_source = benchmark_price_sources.get(benchmark)
             row.position_before = positions[ticker]
 
             if row.status == "ok" and None not in (close, next_close, benchmark_close, benchmark_next_close):
@@ -638,8 +724,11 @@ def main() -> int:
             append_jsonl(jsonl_path, asdict(row))
             status = "ok" if row.status == "ok" else f"error: {row.error}"
             print(f"[done] {ticker} {date} {status} action={row.trader_action} elapsed={row.elapsed_seconds}s")
+        if stop_requested:
+            print(f"[stop] max-runs reached after {new_runs} new agent call(s).")
+            break
 
-    all_rows = load_decisions(jsonl_path)
+    all_rows = latest_decision_rows(load_decisions(jsonl_path))
     all_dicts = [asdict(row) for row in all_rows]
     write_csv(decisions_csv_path, all_dicts)
     metrics, daily = build_metrics(all_rows)
