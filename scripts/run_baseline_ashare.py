@@ -23,10 +23,10 @@ import json
 import re
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 import yfinance as yf
@@ -35,7 +35,6 @@ from tradingagents.agents.utils.rating import parse_rating
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
-
 
 DEFAULT_UNIVERSE = [
     {

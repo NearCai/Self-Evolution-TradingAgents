@@ -49,6 +49,17 @@ def test_parse_a_share_symbol_common_forms():
 
 
 @pytest.mark.unit
+def test_china_index_symbols_are_not_treated_as_stocks():
+    index = china.parse_china_index_symbol("000001.SS")
+
+    assert index.name == "SSE Composite Index"
+    assert index.akshare == "sh000001"
+    assert china.is_china_index_symbol("000001.SS")
+    assert not china.is_a_share_symbol("000001.SS")
+    assert china.is_a_share_symbol("000001.SZ")
+
+
+@pytest.mark.unit
 def test_china_stock_data_uses_local_vendor(monkeypatch):
     monkeypatch.setattr(china, "_fetch_akshare_ohlcv", lambda *a, **k: _sample_ohlcv("AKShare unit"))
 
@@ -128,4 +139,3 @@ def test_partial_config_defaults_keep_china_chain():
     assert fresh["data_vendors"]["fundamental_data"] == "china,yfinance"
     assert fresh["data_vendors"]["news_data"] == "china,yfinance"
     _reset_config()
-

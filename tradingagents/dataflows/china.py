@@ -20,7 +20,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Annotated
 
 import pandas as pd
@@ -66,6 +66,85 @@ class AShareSymbol:
         return f"{self.market}.{self.code}"
 
 
+@dataclass(frozen=True)
+class ChinaIndexSymbol:
+    code: str
+    market: str
+    name: str
+
+    @property
+    def display(self) -> str:
+        suffix = {"sh": "SS", "sz": "SZ"}[self.market]
+        return f"{self.code}.{suffix}"
+
+    @property
+    def akshare(self) -> str:
+        return f"{self.market}{self.code}"
+
+    @property
+    def baostock(self) -> str:
+        return f"{self.market}.{self.code}"
+
+
+_CHINA_INDEXES = {
+    "000001.SS": ChinaIndexSymbol("000001", "sh", "SSE Composite Index"),
+    "000001.SH": ChinaIndexSymbol("000001", "sh", "SSE Composite Index"),
+    "SH.000001": ChinaIndexSymbol("000001", "sh", "SSE Composite Index"),
+    "SH000001": ChinaIndexSymbol("000001", "sh", "SSE Composite Index"),
+    "399001.SZ": ChinaIndexSymbol("399001", "sz", "SZSE Component Index"),
+    "SZ.399001": ChinaIndexSymbol("399001", "sz", "SZSE Component Index"),
+    "SZ399001": ChinaIndexSymbol("399001", "sz", "SZSE Component Index"),
+    "399006.SZ": ChinaIndexSymbol("399006", "sz", "ChiNext Index"),
+    "SZ.399006": ChinaIndexSymbol("399006", "sz", "ChiNext Index"),
+    "SZ399006": ChinaIndexSymbol("399006", "sz", "ChiNext Index"),
+}
+
+
+_KNOWN_A_SHARE_IDENTITY = {
+    "600519.SH": {
+        "company_name": "Kweichow Moutai",
+        "sector": "Consumer staples",
+        "industry": "Liquor",
+        "exchange": "Shanghai Main Board",
+    },
+    "000333.SZ": {
+        "company_name": "Midea Group",
+        "sector": "Consumer discretionary / manufacturing",
+        "industry": "Home appliances",
+        "exchange": "Shenzhen Main Board",
+    },
+    "300750.SZ": {
+        "company_name": "CATL",
+        "sector": "New energy",
+        "industry": "Power batteries",
+        "exchange": "ChiNext",
+    },
+    "600036.SH": {
+        "company_name": "China Merchants Bank",
+        "sector": "Financials",
+        "industry": "Banking",
+        "exchange": "Shanghai Main Board",
+    },
+    "688981.SH": {
+        "company_name": "SMIC",
+        "sector": "Information technology",
+        "industry": "Semiconductors",
+        "exchange": "STAR Market",
+    },
+}
+
+
+def parse_china_index_symbol(symbol: str) -> ChinaIndexSymbol | None:
+    if not isinstance(symbol, str) or not symbol.strip():
+        return None
+    raw = symbol.strip().upper().lstrip("$").replace("_", ".")
+    return _CHINA_INDEXES.get(raw)
+
+
+def is_china_index_symbol(symbol: str) -> bool:
+    return parse_china_index_symbol(symbol) is not None
+
+
 def _infer_market(code: str) -> str | None:
     if code.startswith(_SH_PREFIXES):
         return "sh"
@@ -83,6 +162,8 @@ def parse_a_share_symbol(symbol: str) -> AShareSymbol | None:
     ``sh.600519``, ``SZ000333``, and bare six-digit A-share codes.
     """
     if not isinstance(symbol, str) or not symbol.strip():
+        return None
+    if parse_china_index_symbol(symbol) is not None:
         return None
 
     raw = symbol.strip().upper().lstrip("$")
@@ -121,6 +202,39 @@ def _require_a_share(symbol: str) -> AShareSymbol:
     if parsed is None:
         raise NoMarketDataError(symbol, symbol, "not a supported China A-share symbol")
     return parsed
+
+
+def resolve_china_identity(symbol: str) -> dict[str, str]:
+    """Resolve A-share identity without yfinance.
+
+    This is intentionally best-effort and fast. It avoids yfinance's ``.info``
+    path, which can hang on A-share symbols behind some proxies.
+    """
+    index = parse_china_index_symbol(symbol)
+    if index is not None:
+        return {
+            "company_name": index.name,
+            "sector": "Broad market index",
+            "industry": "Equity index",
+            "exchange": "Shanghai Stock Exchange" if index.market == "sh" else "Shenzhen Stock Exchange",
+            "quote_type": "INDEX",
+        }
+
+    parsed = parse_a_share_symbol(symbol)
+    if parsed is None:
+        return {}
+
+    identity = {
+        "exchange": "Shanghai Stock Exchange" if parsed.market == "sh" else "Shenzhen Stock Exchange",
+        "quote_type": "EQUITY",
+    }
+    identity.update(_KNOWN_A_SHARE_IDENTITY.get(parsed.display, {}))
+    with contextlib.suppress(Exception):
+        basic = _fetch_baostock_basic(parsed)
+        name = basic.get("Name")
+        if name:
+            identity.setdefault("company_name", name)
+    return identity
 
 
 def _date(value: str | None) -> pd.Timestamp:
@@ -343,7 +457,61 @@ def _fetch_baostock_ohlcv(symbol: AShareSymbol, start_date: str, end_date: str) 
     return _filter_ohlcv(df, start_date, end_date)
 
 
+def _fetch_akshare_index_ohlcv(symbol: ChinaIndexSymbol, start_date: str, end_date: str) -> pd.DataFrame:
+    ak = _import_akshare()
+    raw = ak.stock_zh_index_daily(symbol=symbol.akshare)
+    df = _normalize_ohlcv(raw, "AKShare/China index", symbol)
+    return _filter_ohlcv(df, start_date, end_date)
+
+
+def _fetch_baostock_index_ohlcv(symbol: ChinaIndexSymbol, start_date: str, end_date: str) -> pd.DataFrame:
+    bs = _import_baostock()
+    lg = _quiet_call(bs.login)
+    if lg.error_code != "0":
+        raise RuntimeError(lg.error_msg)
+    try:
+        rs = bs.query_history_k_data_plus(
+            symbol.baostock,
+            "date,code,open,high,low,close,volume,amount,pctChg",
+            start_date=_ymd(start_date),
+            end_date=_ymd(end_date),
+            frequency="d",
+            adjustflag="3",
+        )
+        raw = _baostock_rows(rs)
+    finally:
+        _quiet_call(bs.logout)
+    df = _normalize_ohlcv(raw, "BaoStock/China index", symbol)
+    return _filter_ohlcv(df, start_date, end_date)
+
+
+def _load_china_index_ohlcv_range(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    parsed = parse_china_index_symbol(symbol)
+    if parsed is None:
+        raise NoMarketDataError(symbol, symbol, "not a supported China index symbol")
+    errors: list[str] = []
+    for name, fetcher in (
+        ("AKShare index", _fetch_akshare_index_ohlcv),
+        ("BaoStock index", _fetch_baostock_index_ohlcv),
+    ):
+        try:
+            return fetcher(parsed, start_date, end_date)
+        except VendorNotConfiguredError as exc:
+            errors.append(f"{name}: {exc}")
+            continue
+        except NoMarketDataError as exc:
+            errors.append(f"{name}: {exc.detail or exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001 - next local vendor may work
+            logger.debug("%s failed for %s: %s", name, parsed.display, exc)
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+            continue
+    raise NoMarketDataError(symbol, parsed.display, "; ".join(errors))
+
+
 def load_china_ohlcv_range(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    if is_china_index_symbol(symbol):
+        return _load_china_index_ohlcv_range(symbol, start_date, end_date)
     parsed = _require_a_share(symbol)
     errors: list[str] = []
     for name, fetcher in (

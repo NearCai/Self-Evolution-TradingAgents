@@ -25,21 +25,24 @@ import math
 import re
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean, stdev
-from typing import Iterable
 
 import yfinance as yf
 
 from tradingagents.agents.utils.rating import parse_rating
-from tradingagents.dataflows.china import is_a_share_symbol, load_china_ohlcv_range
+from tradingagents.dataflows.china import (
+    is_a_share_symbol,
+    is_china_index_symbol,
+    load_china_ohlcv_range,
+)
 from tradingagents.dataflows.symbol_utils import normalize_symbol
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
-
 
 DEFAULT_UNIVERSE = [
     {
@@ -144,7 +147,7 @@ def resolve_benchmark(ticker: str, config: dict) -> str:
 
 def history_with_retry(ticker: str, start: str, end: str, retries: int = 2):
     last = None
-    if is_a_share_symbol(ticker):
+    if is_a_share_symbol(ticker) or is_china_index_symbol(ticker):
         try:
             end_inclusive = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
             data = load_china_ohlcv_range(ticker, start, end_inclusive)

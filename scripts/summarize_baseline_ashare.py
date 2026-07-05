@@ -12,7 +12,6 @@ Example:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import sys
@@ -25,11 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tradingagents.agents.utils.rating import parse_rating
-from tradingagents.default_config import DEFAULT_CONFIG
-
-from scripts.run_baseline_ashare import (
-    DEFAULT_UNIVERSE,
+from scripts.run_baseline_ashare import (  # noqa: E402
     RunSummary,
     action_direction,
     correctness,
@@ -39,6 +34,8 @@ from scripts.run_baseline_ashare import (
     resolve_benchmark,
     write_csv,
 )
+from tradingagents.agents.utils.rating import parse_rating  # noqa: E402
+from tradingagents.default_config import DEFAULT_CONFIG  # noqa: E402
 
 
 def pct(value: float | None) -> str:

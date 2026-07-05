@@ -236,6 +236,11 @@ class TradingAgentsGraph:
         simulated date is unavailable and the outcome is skipped until the full
         holding window has elapsed.
         """
+        from tradingagents.dataflows.china import (
+            is_a_share_symbol,
+            is_china_index_symbol,
+            load_china_ohlcv_range,
+        )
         from tradingagents.dataflows.symbol_utils import normalize_symbol
 
         try:
@@ -252,8 +257,16 @@ class TradingAgentsGraph:
             # Normalize so the realized-return lookup hits the same instrument
             # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
             # already a canonical Yahoo symbol from ``_resolve_benchmark``.
-            stock = yf.Ticker(normalize_symbol(ticker)).history(start=trade_date, end=end_str)
-            bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
+            end_inclusive = (end - timedelta(days=1)).strftime("%Y-%m-%d")
+            if is_a_share_symbol(ticker) or is_china_index_symbol(ticker):
+                stock = load_china_ohlcv_range(ticker, trade_date, end_inclusive).set_index("Date")
+            else:
+                stock = yf.Ticker(normalize_symbol(ticker)).history(start=trade_date, end=end_str)
+
+            if is_a_share_symbol(benchmark) or is_china_index_symbol(benchmark):
+                bench = load_china_ohlcv_range(benchmark, trade_date, end_inclusive).set_index("Date")
+            else:
+                bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
 
             if len(stock) < 2 or len(bench) < 2:
                 return None, None, None

@@ -93,7 +93,15 @@ def resolve_instrument_identity(ticker: str) -> dict:
     The symbol is normalized first (e.g. ``XAUUSD`` -> ``GC=F``) so identity
     resolves for the same instrument the price path actually fetches (#983).
     """
+    from tradingagents.dataflows.china import (
+        is_a_share_symbol,
+        is_china_index_symbol,
+        resolve_china_identity,
+    )
     from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+    if is_a_share_symbol(ticker) or is_china_index_symbol(ticker):
+        return resolve_china_identity(ticker)
 
     try:
         info = yf.Ticker(normalize_symbol(ticker)).info or {}
@@ -212,6 +220,5 @@ def create_msg_delete():
         return {"messages": removal_operations + [placeholder]}
 
     return delete_messages
-
 
 

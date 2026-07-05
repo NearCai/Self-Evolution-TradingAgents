@@ -52,8 +52,8 @@ def get_YFin_data_online(
     except Exception as exc:
         try:
             data = _get_YFin_data_from_cache(symbol, start_date, end_date)
-        except NoMarketDataError:
-            raise exc
+        except NoMarketDataError as cache_exc:
+            raise exc from cache_exc
 
     # Empty result means the symbol is unknown/delisted. Raise a typed error
     # instead of returning prose: the routing layer turns it into a single

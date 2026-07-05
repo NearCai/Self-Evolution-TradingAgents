@@ -11,7 +11,6 @@ from .alpha_vantage import (
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
 )
-from .config import get_config
 from .china import (
     get_china_balance_sheet,
     get_china_cashflow,
@@ -23,6 +22,7 @@ from .china import (
     get_china_news,
     get_china_stock_data,
 )
+from .config import get_config
 from .errors import (
     NoMarketDataError,
     VendorNotConfiguredError,
