@@ -15,6 +15,7 @@ from collections.abc import Iterable
 import pandas as pd
 from stockstats import wrap
 
+from tradingagents.dataflows.china import is_a_share_symbol, load_china_ohlcv
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
@@ -32,7 +33,10 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     look-ahead rows, but we re-apply the cutoff defensively — this is a
     verification path, so it must not trust its input to be pre-filtered.
     """
-    data = load_ohlcv(symbol, curr_date)
+    if is_a_share_symbol(symbol):
+        data = load_china_ohlcv(symbol, curr_date)
+    else:
+        data = load_ohlcv(symbol, curr_date)
     if data is None or data.empty:
         raise ValueError(f"No OHLCV data available for {symbol}.")
 

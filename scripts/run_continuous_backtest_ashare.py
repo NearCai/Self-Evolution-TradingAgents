@@ -34,6 +34,7 @@ from typing import Iterable
 import yfinance as yf
 
 from tradingagents.agents.utils.rating import parse_rating
+from tradingagents.dataflows.china import is_a_share_symbol, load_china_ohlcv_range
 from tradingagents.dataflows.symbol_utils import normalize_symbol
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -143,6 +144,16 @@ def resolve_benchmark(ticker: str, config: dict) -> str:
 
 def history_with_retry(ticker: str, start: str, end: str, retries: int = 2):
     last = None
+    if is_a_share_symbol(ticker):
+        try:
+            end_inclusive = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            data = load_china_ohlcv_range(ticker, start, end_inclusive)
+            if len(data) > 0:
+                return data.set_index("Date")
+            last = "empty China A-share history"
+        except Exception as exc:
+            last = str(exc)
+
     canonical = normalize_symbol(ticker)
     for attempt in range(retries + 1):
         try:
