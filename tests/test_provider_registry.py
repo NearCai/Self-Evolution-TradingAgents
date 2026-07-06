@@ -7,8 +7,10 @@ import pytest
 from tradingagents.llm_clients.openai_client import (
     OPENAI_COMPATIBLE_PROVIDERS,
     DeepSeekChatOpenAI,
+    KimiChatOpenAI,
     MinimaxChatOpenAI,
     NormalizedChatOpenAI,
+    _fill_missing_tool_messages,
     is_openai_compatible,
 )
 
@@ -36,7 +38,7 @@ def test_registry_membership():
     ("minimax-cn", "https://api.minimaxi.com/v1", MinimaxChatOpenAI, False),
     ("openrouter", "https://openrouter.ai/api/v1", NormalizedChatOpenAI, False),
     ("mistral", "https://api.mistral.ai/v1", NormalizedChatOpenAI, False),
-    ("kimi", "https://api.moonshot.ai/v1", NormalizedChatOpenAI, False),
+    ("kimi", "https://api.moonshot.ai/v1", KimiChatOpenAI, False),
     ("groq", "https://api.groq.com/openai/v1", NormalizedChatOpenAI, False),
     ("nvidia", "https://integrate.api.nvidia.com/v1", NormalizedChatOpenAI, False),
     ("ollama", "http://localhost:11434/v1", NormalizedChatOpenAI, False),
@@ -57,3 +59,27 @@ def test_key_optionality():
     assert OPENAI_COMPATIBLE_PROVIDERS["xai"].key_optional is False
     # OLLAMA_BASE_URL is the only base-URL env override.
     assert OPENAI_COMPATIBLE_PROVIDERS["ollama"].base_url_env == "OLLAMA_BASE_URL"
+
+
+@pytest.mark.unit
+def test_kimi_payload_fills_missing_tool_messages():
+    payload = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "get_indicators:1", "type": "function", "function": {"name": "get_indicators"}},
+                    {"id": "get_indicators:2", "type": "function", "function": {"name": "get_indicators"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "get_indicators:1", "content": "rsi rows"},
+            {"role": "user", "content": "continue"},
+        ]
+    }
+
+    fixed = _fill_missing_tool_messages(payload)
+
+    assert fixed["messages"][2]["role"] == "tool"
+    assert fixed["messages"][2]["tool_call_id"] == "get_indicators:2"
+    assert fixed["messages"][3]["role"] == "user"

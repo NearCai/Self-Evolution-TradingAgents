@@ -68,6 +68,80 @@ class LocalCompatibleChatOpenAI(NormalizedChatOpenAI):
         return super().with_structured_output(schema, method=method, **kwargs)
 
 
+def _tool_call_ids_from_payload_message(message: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    for tool_call in message.get("tool_calls") or []:
+        if isinstance(tool_call, dict) and tool_call.get("id"):
+            ids.append(str(tool_call["id"]))
+    return ids
+
+
+def _fill_missing_tool_messages(payload: dict[str, Any]) -> dict[str, Any]:
+    """Insert placeholder tool messages for strict OpenAI-compatible providers."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload
+
+    fixed: list[dict[str, Any]] = []
+    i = 0
+    while i < len(messages):
+        message = messages[i]
+        fixed.append(message)
+        if not isinstance(message, dict):
+            i += 1
+            continue
+
+        expected = _tool_call_ids_from_payload_message(message)
+        if not expected:
+            i += 1
+            continue
+
+        present: set[str] = set()
+        j = i + 1
+        while j < len(messages):
+            next_message = messages[j]
+            if not isinstance(next_message, dict) or next_message.get("role") != "tool":
+                break
+            tool_call_id = next_message.get("tool_call_id")
+            if tool_call_id:
+                present.add(str(tool_call_id))
+            fixed.append(next_message)
+            j += 1
+
+        for tool_call_id in expected:
+            if tool_call_id in present:
+                continue
+            fixed.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": (
+                        "<unavailable> The local tool executor did not return a "
+                        "message for this tool_call_id. Continue with available "
+                        "evidence and explicitly note the missing tool output."
+                    ),
+                }
+            )
+        i = j
+
+    payload["messages"] = fixed
+    return payload
+
+
+class KimiChatOpenAI(NormalizedChatOpenAI):
+    """Moonshot/Kimi compatibility shims.
+
+    Kimi's OpenAI-compatible endpoint strictly rejects any outgoing history
+    where an assistant tool call lacks a matching ``role=tool`` response. Some
+    LangGraph/LangChain paths can still leave gaps when models emit many tool
+    calls at once, so patch the final payload defensively.
+    """
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        return _fill_missing_tool_messages(payload)
+
+
 def _input_to_messages(input_: Any) -> list:
     """Normalise a langchain LLM input to a list of message objects.
 
@@ -221,7 +295,7 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
     "minimax-cn": ProviderSpec(base_url="https://api.minimaxi.com/v1", chat_class=MinimaxChatOpenAI),
     "openrouter": ProviderSpec(base_url="https://openrouter.ai/api/v1"),
     "mistral":    ProviderSpec(base_url="https://api.mistral.ai/v1"),
-    "kimi":       ProviderSpec(base_url="https://api.moonshot.ai/v1"),
+    "kimi":       ProviderSpec(base_url="https://api.moonshot.ai/v1", chat_class=KimiChatOpenAI),
     "groq":       ProviderSpec(base_url="https://api.groq.com/openai/v1"),
     "nvidia":     ProviderSpec(base_url="https://integrate.api.nvidia.com/v1"),
     "ollama":     ProviderSpec(base_url="http://localhost:11434/v1", base_url_env="OLLAMA_BASE_URL",

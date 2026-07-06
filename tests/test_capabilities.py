@@ -56,6 +56,11 @@ class TestPatternMatches:
         caps = get_capabilities("MiniMax-M4-highspeed")
         assert caps.supports_tool_choice is False
 
+    def test_kimi_k_models_suppress_forced_tool_choice(self):
+        caps = get_capabilities("kimi-k2.6")
+        assert caps.supports_tool_choice is False
+        assert caps.preferred_structured_method == "function_calling"
+
 
 @pytest.mark.unit
 class TestMinimaxExactMatches:

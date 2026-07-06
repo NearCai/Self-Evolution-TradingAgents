@@ -355,7 +355,9 @@ def run_agent_decision(
         summary.report_path = str(report_path)
         summary.state_path = str(state_path)
         final_state_out = final_state
-    except Exception as exc:
+    except BaseException as exc:  # noqa: BLE001 - batch runs must record provider/library exits
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         summary.status = "error"
         summary.error = repr(exc)
         final_state_out = None

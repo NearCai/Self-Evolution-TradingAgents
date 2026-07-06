@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import yfinance as yf
-from langgraph.prebuilt import ToolNode
 
 # Import the abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
@@ -40,6 +39,7 @@ from .propagation import Propagator
 from .reflection import Reflector
 from .setup import GraphSetup
 from .signal_processing import SignalProcessor
+from .tool_node_compat import create_compatible_tool_node
 
 logger = logging.getLogger(__name__)
 
@@ -154,14 +154,22 @@ class TradingAgentsGraph:
         # string ("0.2") works the same as a programmatic float.
         temperature = self.config.get("temperature")
         if temperature is not None and temperature != "":
-            kwargs["temperature"] = float(temperature)
+            parsed_temperature = float(temperature)
+            if provider == "kimi" and parsed_temperature != 1.0:
+                logger.warning(
+                    "Kimi provider only accepts temperature=1 for the selected model; "
+                    "overriding configured temperature=%s.",
+                    temperature,
+                )
+                parsed_temperature = 1.0
+            kwargs["temperature"] = parsed_temperature
 
         return kwargs
 
-    def _create_tool_nodes(self) -> dict[str, ToolNode]:
+    def _create_tool_nodes(self) -> dict[str, Any]:
         """Create tool nodes for different data sources using abstract methods."""
         return {
-            "market": ToolNode(
+            "market": create_compatible_tool_node(
                 [
                     # Core stock data tools
                     get_stock_data,
@@ -173,13 +181,13 @@ class TradingAgentsGraph:
                     get_verified_market_snapshot,
                 ]
             ),
-            "social": ToolNode(
+            "social": create_compatible_tool_node(
                 [
                     # News tools for social media analysis
                     get_news,
                 ]
             ),
-            "news": ToolNode(
+            "news": create_compatible_tool_node(
                 [
                     # News and insider information
                     get_news,
@@ -189,7 +197,7 @@ class TradingAgentsGraph:
                     get_prediction_markets,
                 ]
             ),
-            "fundamentals": ToolNode(
+            "fundamentals": create_compatible_tool_node(
                 [
                     # Fundamental analysis tools
                     get_fundamentals,

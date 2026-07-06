@@ -86,6 +86,63 @@ def test_default_output_dir_is_project_local():
 
 
 @pytest.mark.unit
+def test_run_agent_decision_records_system_exit(monkeypatch, tmp_path):
+    class ExitingGraph:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def propagate(self, *args, **kwargs):
+            raise SystemExit("provider transport aborted")
+
+    monkeypatch.setattr(continuous, "TradingAgentsGraph", ExitingGraph)
+
+    row, state = continuous.run_agent_decision(
+        {"ticker": "600519.SS", "name": "", "board": "", "sector": ""},
+        "2026-06-01",
+        "2026-06-02",
+        ["market"],
+        tmp_path,
+        {
+            "llm_provider": "kimi",
+            "quick_think_llm": "quick",
+            "deep_think_llm": "deep",
+        },
+        debug=False,
+    )
+
+    assert state is None
+    assert row.status == "error"
+    assert "SystemExit" in row.error
+
+
+@pytest.mark.unit
+def test_run_agent_decision_preserves_keyboard_interrupt(monkeypatch, tmp_path):
+    class InterruptingGraph:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def propagate(self, *args, **kwargs):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(continuous, "TradingAgentsGraph", InterruptingGraph)
+
+    with pytest.raises(KeyboardInterrupt):
+        continuous.run_agent_decision(
+            {"ticker": "600519.SS", "name": "", "board": "", "sector": ""},
+            "2026-06-01",
+            "2026-06-02",
+            ["market"],
+            tmp_path,
+            {
+                "llm_provider": "kimi",
+                "quick_think_llm": "quick",
+                "deep_think_llm": "deep",
+            },
+            debug=False,
+        )
+
+
+@pytest.mark.unit
 def test_latest_decision_rows_deduplicates_force_reruns():
     old = continuous.DecisionRow(
         ticker="600519.SS",

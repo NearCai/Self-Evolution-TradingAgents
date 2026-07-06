@@ -67,6 +67,12 @@ class TestProviderKwargsTemperature:
         graph.config = {"llm_provider": "openai", "temperature": temperature}
         return TradingAgentsGraph._get_provider_kwargs(graph)
 
+    def _kwargs_for_provider(self, provider, temperature):
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+        graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+        graph.config = {"llm_provider": provider, "temperature": temperature}
+        return TradingAgentsGraph._get_provider_kwargs(graph)
+
     def test_float_string_coerced(self):
         assert self._kwargs_for("0.3")["temperature"] == 0.3
 
@@ -78,3 +84,6 @@ class TestProviderKwargsTemperature:
 
     def test_empty_string_omitted(self):
         assert "temperature" not in self._kwargs_for("")
+
+    def test_kimi_temperature_is_normalized_to_one(self):
+        assert self._kwargs_for_provider("kimi", "0.0")["temperature"] == 1.0
