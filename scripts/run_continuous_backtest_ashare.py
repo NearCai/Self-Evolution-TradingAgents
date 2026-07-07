@@ -291,12 +291,16 @@ def build_backtest_config(
     memory_mode: str,
     memory_holding_days: int,
     benchmark_ticker: str | None = None,
+    enable_prediction_markets: bool = True,
+    enable_us_social_sources: bool = True,
 ) -> dict:
     base_config = copy.deepcopy(DEFAULT_CONFIG)
     base_config["results_dir"] = str(output_dir / "_graph_logs")
     base_config["memory_lookahead_safe"] = True
     base_config["memory_outcome_holding_days"] = memory_holding_days
     base_config["benchmark_ticker"] = benchmark_ticker
+    base_config["enable_prediction_markets"] = enable_prediction_markets
+    base_config["enable_us_social_sources"] = enable_us_social_sources
 
     data_vendors = dict(base_config.get("data_vendors", {}))
     data_vendors.update(A_SHARE_DATA_VENDOR_CONFIG)
@@ -561,6 +565,10 @@ def main() -> int:
     parser.add_argument("--allow-short", action="store_true", help="Map Sell to -1. Default is long/cash for A-shares.")
     parser.add_argument("--transaction-cost-bps", type=float, default=0.0,
                         help="One-way transaction cost in basis points applied to turnover.")
+    parser.add_argument("--disable-prediction-markets", action="store_true",
+                        help="Do not expose Polymarket/prediction-market tools to the news analyst.")
+    parser.add_argument("--disable-us-social-sources", action="store_true",
+                        help="Do not fetch StockTwits/Reddit in the sentiment analyst.")
     parser.add_argument("--max-runs", type=int, default=None,
                         help="Stop after this many new agent calls; useful for smoke/resume validation.")
     parser.add_argument("--force", action="store_true", help="Re-run completed ticker/date rows.")
@@ -594,6 +602,8 @@ def main() -> int:
         memory_mode=args.memory_mode,
         memory_holding_days=args.memory_holding_days,
         benchmark_ticker=args.benchmark_ticker,
+        enable_prediction_markets=not args.disable_prediction_markets,
+        enable_us_social_sources=not args.disable_us_social_sources,
     )
 
     price_end = (datetime.strptime(args.end_date, "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
@@ -629,6 +639,8 @@ def main() -> int:
     print("Memory log:", base_config.get("memory_log_path"))
     print("Memory look-ahead safe:", base_config["memory_lookahead_safe"])
     print("Data vendors:", base_config["data_vendors"])
+    print("Prediction markets enabled:", base_config["enable_prediction_markets"])
+    print("US social sources enabled:", base_config["enable_us_social_sources"])
     print("Benchmark policy:", args.benchmark_ticker or "A-share board-aware")
     print("Execution policy:", "long/short" if args.allow_short else "long/cash")
     print("Transaction cost bps:", args.transaction_cost_bps)

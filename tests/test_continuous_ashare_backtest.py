@@ -79,6 +79,20 @@ def test_build_backtest_config_forces_china_data_vendors(tmp_path):
 
 
 @pytest.mark.unit
+def test_build_backtest_config_can_disable_optional_overseas_sources(tmp_path):
+    cfg = continuous.build_backtest_config(
+        output_dir=tmp_path,
+        memory_mode="experiment",
+        memory_holding_days=5,
+        enable_prediction_markets=False,
+        enable_us_social_sources=False,
+    )
+
+    assert cfg["enable_prediction_markets"] is False
+    assert cfg["enable_us_social_sources"] is False
+
+
+@pytest.mark.unit
 def test_default_output_dir_is_project_local():
     out = continuous.default_output_dir("2026-06-01")
 

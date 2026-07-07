@@ -18,6 +18,8 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_ENABLE_PREDICTION_MARKETS": "enable_prediction_markets",
+    "TRADINGAGENTS_ENABLE_US_SOCIAL_SOURCES":  "enable_us_social_sources",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
     # interactive choice, which is skipped when the matching var is set.
@@ -125,6 +127,11 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "ECB Bank of England BOJ central bank policy",
         "oil commodities supply chain energy",
     ],
+    # Optional enrichment sources. Keep enabled by default for the original
+    # project behavior; A-share experiments can disable them to avoid noisy
+    # overseas social/prediction-market fetches.
+    "enable_prediction_markets": True,
+    "enable_us_social_sources": True,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
     # The configured value is the exact vendor chain — requests are NOT silently

@@ -39,6 +39,7 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 
@@ -62,13 +63,25 @@ def create_sentiment_analyst(llm):
         end_date = state["trade_date"]
         start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
+        config = get_config()
+        use_us_social = bool(config.get("enable_us_social_sources", True))
 
         # Pre-fetch all three sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+        if use_us_social:
+            stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
+            reddit_block = fetch_reddit_posts(ticker)
+        else:
+            stocktwits_block = (
+                "<disabled> US StockTwits collection is disabled for this run; "
+                "do not treat its absence as a market signal."
+            )
+            reddit_block = (
+                "<disabled> US Reddit collection is disabled for this run; "
+                "do not treat its absence as a market signal."
+            )
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -77,6 +90,7 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            us_social_enabled=use_us_social,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -126,9 +140,16 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    us_social_enabled: bool = True,
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+    us_social_guidance = ""
+    if not us_social_enabled:
+        us_social_guidance = """
+For this run, US retail/social sources are intentionally disabled. Focus on the company-news block and any China/Eastmoney retail or sentiment proxies inside it. Do not penalize the ticker for missing StockTwits or Reddit data, and do not infer overseas investor apathy from the disabled placeholders.
+"""
+
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on the pre-fetched data sources below.
 
 ## Data sources (pre-fetched, in this prompt)
 
@@ -152,6 +173,8 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 <start_of_reddit>
 {reddit_block}
 <end_of_reddit>
+
+{us_social_guidance}
 
 ## How to analyze this data (best practices)
 
