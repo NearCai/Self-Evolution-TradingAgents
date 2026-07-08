@@ -139,10 +139,7 @@ def default_output_dir(
 ) -> Path:
     start_month = start_date[:7].replace("-", "_")
     end_month = end_date[:7].replace("-", "_")
-    if start_month == end_month:
-        suffix = start_month
-    else:
-        suffix = f"{start_month}_to_{end_month}"
+    suffix = start_month if start_month == end_month else f"{start_month}_to_{end_month}"
     return PROJECT_ROOT / "results" / f"continuous_ashare_{suffix}"
 
 
@@ -346,7 +343,7 @@ def run_agent_decision(
     output_dir: Path,
     config: dict,
     debug: bool,
-    decision_source: str,
+    decision_source: str = "pm-rating",
 ) -> tuple[DecisionRow, dict | None]:
     started = datetime.now()
     ticker = item["ticker"]

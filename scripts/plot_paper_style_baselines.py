@@ -8,7 +8,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-
 ORDER = ["TradingAgents", "Buy&Hold", "MACD", "KDJ&RSI", "ZMR", "SMA"]
 COLORS = {
     "TradingAgents": "#E76F51",

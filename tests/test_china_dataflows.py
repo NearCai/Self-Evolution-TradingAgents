@@ -119,7 +119,7 @@ def test_china_ohlcv_cache_reuses_successful_fetch(monkeypatch, tmp_path):
     second = china.load_china_ohlcv_range("600519.SS", "2025-06-03", "2025-06-05")
 
     assert list(second["Close"]) == [10.6, 10.9, 11.2]
-    assert "China OHLCV cache (600519.SH)" == second.attrs["source"]
+    assert second.attrs["source"] == "China OHLCV cache (600519.SH)"
 
 
 @pytest.mark.unit

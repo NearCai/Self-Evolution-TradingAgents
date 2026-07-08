@@ -151,4 +151,5 @@ def create_compatible_tool_node(
             logger.warning("ToolNode execution failed; adding compatibility placeholders: %s", exc)
             return ensure_tool_call_responses(state, {"messages": []}, execution_error=exc)
 
+    compatible_tool_node.tools_by_name = inner.tools_by_name  # type: ignore[attr-defined]
     return compatible_tool_node

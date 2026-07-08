@@ -22,7 +22,6 @@ from statistics import mean, stdev
 
 import pandas as pd
 
-
 TRADING_DAYS = 252.0
 DEFAULT_OUTPUT_DIR = Path("results") / "continuous_ashare_2026_06_kimi_full"
 
