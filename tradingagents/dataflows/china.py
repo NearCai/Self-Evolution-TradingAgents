@@ -1164,10 +1164,10 @@ def _filter_news_window(df: pd.DataFrame, date_col: str, start_date: str, end_da
     if df is None or df.empty or date_col not in df.columns:
         return pd.DataFrame()
     out = df.copy()
-    out[date_col] = pd.to_datetime(out[date_col], errors="coerce")
+    out[date_col] = pd.to_datetime(out[date_col], errors="coerce", format="mixed")
     start = _date(start_date)
-    end = _date(end_date) + pd.Timedelta(days=1)
-    out = out[(out[date_col] >= start) & (out[date_col] <= end)]
+    end_exclusive = _date(end_date) + pd.Timedelta(days=1)
+    out = out[(out[date_col] >= start) & (out[date_col] < end_exclusive)]
     return out.sort_values(date_col, ascending=False).reset_index(drop=True)
 
 

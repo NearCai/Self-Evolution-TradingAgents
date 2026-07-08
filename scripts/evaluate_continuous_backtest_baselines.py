@@ -277,7 +277,7 @@ def agent_results(decisions: pd.DataFrame, allow_short: bool) -> list[StrategyRe
     for row in decisions.itertuples(index=False):
         ticker = row.ticker
         before = positions[ticker]
-        action = row.trader_action
+        action = getattr(row, "execution_action", None) or row.trader_action
         after = target_position(action, before, allow_short)
         strategy_ret = after * float(row.stock_return_next)
         equities[ticker] *= 1.0 + strategy_ret

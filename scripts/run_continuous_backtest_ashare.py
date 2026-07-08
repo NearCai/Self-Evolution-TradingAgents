@@ -1,7 +1,7 @@
-"""Run a continuous one-month A-share TradingAgents backtest.
+"""Run a continuous A-share TradingAgents backtest.
 
 This is closer to the paper-style simulation than the point-in-time baseline:
-for each trading day in a month, run the agent, execute its signal for the next
+for each trading day in a period, run the agent, execute its signal for the next
 trading interval, and compute portfolio metrics.
 
 The default memory mode uses one shared experiment memory file. This preserves
@@ -60,27 +60,18 @@ DEFAULT_UNIVERSE = [
         "sector": "Home appliances / manufacturing",
     },
     {
-        "ticker": "300750.SZ",
-        "name": "CATL",
-        "board": "ChiNext",
-        "sector": "New energy / batteries",
-    },
-    {
         "ticker": "600036.SS",
         "name": "China Merchants Bank",
         "board": "Shanghai Main",
         "sector": "Banking",
     },
-    {
-        "ticker": "688981.SS",
-        "name": "SMIC",
-        "board": "STAR Market",
-        "sector": "Semiconductors",
-    },
 ]
 
-DEFAULT_START_DATE = "2026-06-01"
+DEFAULT_START_DATE = "2026-04-01"
 DEFAULT_END_DATE = "2026-06-30"
+DEFAULT_LLM_PROVIDER = "glm-cn"
+DEFAULT_QUICK_MODEL = "glm-5-turbo"
+DEFAULT_DEEP_MODEL = "glm-5"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 A_SHARE_DATA_VENDOR_CONFIG = {
@@ -108,6 +99,8 @@ class DecisionRow:
     deep_model: str
     rating: str | None = None
     trader_action: str | None = None
+    decision_source: str | None = None
+    execution_action: str | None = None
     signal_direction: int | None = None
     position_before: float | None = None
     position_after: float | None = None
@@ -140,9 +133,17 @@ def parse_csv_arg(raw: str | None, default: Iterable[str]) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def default_output_dir(start_date: str = DEFAULT_START_DATE) -> Path:
-    month = start_date[:7].replace("-", "_")
-    return PROJECT_ROOT / "results" / f"continuous_ashare_{month}"
+def default_output_dir(
+    start_date: str = DEFAULT_START_DATE,
+    end_date: str = DEFAULT_END_DATE,
+) -> Path:
+    start_month = start_date[:7].replace("-", "_")
+    end_month = end_date[:7].replace("-", "_")
+    if start_month == end_month:
+        suffix = start_month
+    else:
+        suffix = f"{start_month}_to_{end_month}"
+    return PROJECT_ROOT / "results" / f"continuous_ashare_{suffix}"
 
 
 def resolve_benchmark(ticker: str, config: dict) -> str:
@@ -221,6 +222,10 @@ def extract_trader_action(final_state: dict, rating: str) -> str:
         match = PROPOSAL_RE.search(text) or ACTION_RE.search(text)
         if match:
             return match.group(1).capitalize()
+    return rating_to_action(rating)
+
+
+def rating_to_action(rating: str | None) -> str:
     rating_map = {
         "Buy": "Buy",
         "Overweight": "Buy",
@@ -228,16 +233,27 @@ def extract_trader_action(final_state: dict, rating: str) -> str:
         "Underweight": "Sell",
         "Sell": "Sell",
     }
-    return rating_map.get(rating, "Hold")
+    return rating_map.get(rating or "", "Hold")
 
 
-def action_direction(action: str, rating: str) -> int:
+def execution_action_from_source(trader_action: str, rating: str, decision_source: str) -> str:
+    if decision_source == "pm-rating":
+        return rating_to_action(rating)
+    return trader_action or "Hold"
+
+
+def action_direction(action: str, rating: str = "") -> int:
     action = (action or "").lower()
     rating = (rating or "").lower()
-    if action == "buy" or rating in {"buy", "overweight"}:
+    if action == "buy":
         return 1
-    if action == "sell" or rating in {"sell", "underweight"}:
+    if action == "sell":
         return -1
+    if not action or action == "hold":
+        if rating in {"buy", "overweight"}:
+            return 1
+        if rating in {"sell", "underweight"}:
+            return -1
     return 0
 
 
@@ -293,6 +309,9 @@ def build_backtest_config(
     benchmark_ticker: str | None = None,
     enable_prediction_markets: bool = True,
     enable_us_social_sources: bool = True,
+    llm_provider: str | None = None,
+    quick_model: str | None = None,
+    deep_model: str | None = None,
 ) -> dict:
     base_config = copy.deepcopy(DEFAULT_CONFIG)
     base_config["results_dir"] = str(output_dir / "_graph_logs")
@@ -301,6 +320,12 @@ def build_backtest_config(
     base_config["benchmark_ticker"] = benchmark_ticker
     base_config["enable_prediction_markets"] = enable_prediction_markets
     base_config["enable_us_social_sources"] = enable_us_social_sources
+    if llm_provider:
+        base_config["llm_provider"] = llm_provider
+    if quick_model:
+        base_config["quick_think_llm"] = quick_model
+    if deep_model:
+        base_config["deep_think_llm"] = deep_model
 
     data_vendors = dict(base_config.get("data_vendors", {}))
     data_vendors.update(A_SHARE_DATA_VENDOR_CONFIG)
@@ -321,6 +346,7 @@ def run_agent_decision(
     output_dir: Path,
     config: dict,
     debug: bool,
+    decision_source: str,
 ) -> tuple[DecisionRow, dict | None]:
     started = datetime.now()
     ticker = item["ticker"]
@@ -336,6 +362,7 @@ def run_agent_decision(
         llm_provider=config["llm_provider"],
         quick_model=config["quick_think_llm"],
         deep_model=config["deep_think_llm"],
+        decision_source=decision_source,
         started_at=started.isoformat(timespec="seconds"),
     )
 
@@ -347,15 +374,18 @@ def run_agent_decision(
         graph = TradingAgentsGraph(selected_analysts=tuple(analysts), debug=debug, config=config)
         final_state, decision = graph.propagate(ticker, date, asset_type="stock")
         rating = parse_rating(final_state.get("final_trade_decision", ""), default=decision or "Hold")
-        action = extract_trader_action(final_state, rating)
+        trader_action = extract_trader_action(final_state, rating)
+        execution_action = execution_action_from_source(trader_action, rating, decision_source)
 
         report_path = graph.save_reports(final_state, ticker, save_path=run_dir / "reports")
         state_path = run_dir / "final_state.json"
         state_path.write_text(json.dumps(final_state, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
         summary.rating = rating
-        summary.trader_action = action
-        summary.signal_direction = action_direction(action, rating)
+        summary.trader_action = trader_action
+        summary.decision_source = decision_source
+        summary.execution_action = execution_action
+        summary.signal_direction = action_direction(execution_action)
         summary.report_path = str(report_path)
         summary.state_path = str(state_path)
         final_state_out = final_state
@@ -554,7 +584,14 @@ def main() -> int:
     parser.add_argument("--start-date", default=DEFAULT_START_DATE, help="Backtest start date, YYYY-MM-DD.")
     parser.add_argument("--end-date", default=DEFAULT_END_DATE, help="Backtest end date, YYYY-MM-DD.")
     parser.add_argument("--analysts", default="market", help="Comma-separated analysts: market,social,news,fundamentals.")
-    parser.add_argument("--output-dir", default=None, help="Defaults to results/continuous_ashare_<YYYY_MM>.")
+    parser.add_argument("--output-dir", default=None,
+                        help="Defaults to results/continuous_ashare_<start_YYYY_MM>_to_<end_YYYY_MM>.")
+    parser.add_argument("--llm-provider", default=DEFAULT_LLM_PROVIDER,
+                        help="LLM provider for this run. Default: glm-cn.")
+    parser.add_argument("--quick-model", default=DEFAULT_QUICK_MODEL,
+                        help="Quick-thinking model for this run. Default: glm-5-turbo.")
+    parser.add_argument("--deep-model", default=DEFAULT_DEEP_MODEL,
+                        help="Deep-thinking model for this run. Default: glm-5.")
     parser.add_argument("--calendar-ticker", default="000001.SS", help="Ticker used to derive the A-share trading calendar.")
     parser.add_argument("--memory-mode", choices=["experiment", "native", "none"], default="experiment",
                         help="experiment=one shared run memory; native=default project memory; none=disable memory log.")
@@ -562,6 +599,8 @@ def main() -> int:
                         help="Outcome window used by TradingAgents reflection memory.")
     parser.add_argument("--benchmark-ticker", default=None,
                         help="Optional single benchmark override. Default uses A-share board-aware benchmarks.")
+    parser.add_argument("--decision-source", choices=["pm-rating", "trader"], default="pm-rating",
+                        help="Which agent output drives execution. Default executes Portfolio Manager rating.")
     parser.add_argument("--allow-short", action="store_true", help="Map Sell to -1. Default is long/cash for A-shares.")
     parser.add_argument("--transaction-cost-bps", type=float, default=0.0,
                         help="One-way transaction cost in basis points applied to turnover.")
@@ -584,7 +623,7 @@ def main() -> int:
         if ticker not in known:
             universe.append({"ticker": ticker, "name": "", "board": "", "sector": ""})
 
-    output_dir = Path(args.output_dir) if args.output_dir else default_output_dir(args.start_date)
+    output_dir = Path(args.output_dir) if args.output_dir else default_output_dir(args.start_date, args.end_date)
     output_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = output_dir / "continuous_decisions.jsonl"
     decisions_csv_path = output_dir / "continuous_decisions.csv"
@@ -604,6 +643,9 @@ def main() -> int:
         benchmark_ticker=args.benchmark_ticker,
         enable_prediction_markets=not args.disable_prediction_markets,
         enable_us_social_sources=not args.disable_us_social_sources,
+        llm_provider=args.llm_provider,
+        quick_model=args.quick_model,
+        deep_model=args.deep_model,
     )
 
     price_end = (datetime.strptime(args.end_date, "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
@@ -642,6 +684,7 @@ def main() -> int:
     print("Prediction markets enabled:", base_config["enable_prediction_markets"])
     print("US social sources enabled:", base_config["enable_us_social_sources"])
     print("Benchmark policy:", args.benchmark_ticker or "A-share board-aware")
+    print("Decision source:", args.decision_source)
     print("Execution policy:", "long/short" if args.allow_short else "long/cash")
     print("Transaction cost bps:", args.transaction_cost_bps)
     print()
@@ -662,7 +705,11 @@ def main() -> int:
     completed = {
         decision_key(row): row
         for row in existing_rows
-        if row.status == "ok" and row.strategy_return_next is not None
+        if (
+            row.status == "ok"
+            and row.strategy_return_next is not None
+            and row.decision_source == args.decision_source
+        )
     }
     positions = {item["ticker"]: 0.0 for item in universe}
     equities = {item["ticker"]: 1.0 for item in universe}
@@ -691,7 +738,16 @@ def main() -> int:
                 continue
 
             print(f"[run] {ticker} {date} -> {next_date} analysts={analyst_key}")
-            row, _ = run_agent_decision(item, date, next_date, analysts, output_dir, base_config, args.debug)
+            row, _ = run_agent_decision(
+                item,
+                date,
+                next_date,
+                analysts,
+                output_dir,
+                base_config,
+                args.debug,
+                args.decision_source,
+            )
             new_runs += 1
 
             close = prices[ticker].get(date)
@@ -712,7 +768,7 @@ def main() -> int:
             if row.status == "ok" and None not in (close, next_close, benchmark_close, benchmark_next_close):
                 stock_ret = (float(next_close) - float(close)) / float(close)
                 bench_ret = (float(benchmark_next_close) - float(benchmark_close)) / float(benchmark_close)
-                new_position = target_position(row.trader_action or "Hold", positions[ticker], args.allow_short)
+                new_position = target_position(row.execution_action or "Hold", positions[ticker], args.allow_short)
                 turnover = abs(new_position - positions[ticker])
                 cost = turnover * transaction_cost_rate
                 strategy_ret = new_position * stock_ret - cost
@@ -737,7 +793,11 @@ def main() -> int:
 
             append_jsonl(jsonl_path, asdict(row))
             status = "ok" if row.status == "ok" else f"error: {row.error}"
-            print(f"[done] {ticker} {date} {status} action={row.trader_action} elapsed={row.elapsed_seconds}s")
+            print(
+                f"[done] {ticker} {date} {status} "
+                f"action={row.execution_action} trader_action={row.trader_action} "
+                f"rating={row.rating} elapsed={row.elapsed_seconds}s"
+            )
         if stop_requested:
             print(f"[stop] max-runs reached after {new_runs} new agent call(s).")
             break
