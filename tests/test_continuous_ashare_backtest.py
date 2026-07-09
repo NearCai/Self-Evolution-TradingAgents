@@ -93,6 +93,23 @@ def test_build_backtest_config_can_disable_optional_overseas_sources(tmp_path):
 
 
 @pytest.mark.unit
+def test_build_backtest_config_can_enable_evolution_skills(tmp_path):
+    skills_path = tmp_path / "candidate_skills.jsonl"
+    cfg = continuous.build_backtest_config(
+        output_dir=tmp_path,
+        memory_mode="experiment",
+        memory_holding_days=5,
+        evolution_skills_path=str(skills_path),
+        evolution_skill_max_skills=2,
+        evolution_skill_max_chars=900,
+    )
+
+    assert cfg["evolution_skills_path"] == str(skills_path)
+    assert cfg["evolution_skill_max_skills"] == 2
+    assert cfg["evolution_skill_max_chars"] == 900
+
+
+@pytest.mark.unit
 def test_default_output_dir_is_project_local():
     out = continuous.default_output_dir("2026-06-01")
 

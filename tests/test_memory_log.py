@@ -64,6 +64,7 @@ def _make_pm_state(past_context=""):
     return {
         "company_of_interest": "NVDA",
         "past_context": past_context,
+        "evolution_skill_context": "",
         "risk_debate_state": {
             "history": "Risk debate history.",
             "aggressive_history": "",
@@ -685,6 +686,15 @@ class TestPortfolioManagerInjection:
         state = propagator.create_initial_state("NVDA", "2026-01-10")
         assert state["past_context"] == ""
 
+    def test_evolution_skill_context_in_initial_state(self):
+        propagator = Propagator()
+        state = propagator.create_initial_state(
+            "NVDA",
+            "2026-01-10",
+            evolution_skill_context="candidate skill",
+        )
+        assert state["evolution_skill_context"] == "candidate skill"
+
     # PM prompt
 
     def test_pm_prompt_includes_past_context(self):
@@ -704,6 +714,16 @@ class TestPortfolioManagerInjection:
         state = _make_pm_state(past_context="")
         pm_node(state)
         assert "Lessons from prior decisions" not in captured["prompt"]
+
+    def test_pm_prompt_includes_evolution_skill_context(self):
+        captured = {}
+        llm = _structured_pm_llm(captured)
+        pm_node = create_portfolio_manager(llm)
+        state = _make_pm_state()
+        state["evolution_skill_context"] = "Caution: rating=Hold"
+        pm_node(state)
+        assert "Candidate self-evolved trading skills" in captured["prompt"]
+        assert "Caution: rating=Hold" in captured["prompt"]
 
     def test_pm_returns_rendered_markdown_with_rating(self):
         """The structured PortfolioDecision is rendered to markdown that

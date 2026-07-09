@@ -309,6 +309,9 @@ def build_backtest_config(
     llm_provider: str | None = None,
     quick_model: str | None = None,
     deep_model: str | None = None,
+    evolution_skills_path: str | None = None,
+    evolution_skill_max_skills: int = 3,
+    evolution_skill_max_chars: int = 1800,
 ) -> dict:
     base_config = copy.deepcopy(DEFAULT_CONFIG)
     base_config["results_dir"] = str(output_dir / "_graph_logs")
@@ -317,6 +320,9 @@ def build_backtest_config(
     base_config["benchmark_ticker"] = benchmark_ticker
     base_config["enable_prediction_markets"] = enable_prediction_markets
     base_config["enable_us_social_sources"] = enable_us_social_sources
+    base_config["evolution_skills_path"] = evolution_skills_path
+    base_config["evolution_skill_max_skills"] = evolution_skill_max_skills
+    base_config["evolution_skill_max_chars"] = evolution_skill_max_chars
     if llm_provider:
         base_config["llm_provider"] = llm_provider
     if quick_model:
@@ -605,6 +611,12 @@ def main() -> int:
                         help="Do not expose Polymarket/prediction-market tools to the news analyst.")
     parser.add_argument("--disable-us-social-sources", action="store_true",
                         help="Do not fetch StockTwits/Reddit in the sentiment analyst.")
+    parser.add_argument("--evolution-skills-jsonl", default=None,
+                        help="Optional candidate_skills.jsonl to inject into the Portfolio Manager prompt.")
+    parser.add_argument("--evolution-skill-max-skills", type=int, default=3,
+                        help="Maximum candidate skills injected per agent decision.")
+    parser.add_argument("--evolution-skill-max-chars", type=int, default=1800,
+                        help="Maximum characters for injected candidate skill context.")
     parser.add_argument("--max-runs", type=int, default=None,
                         help="Stop after this many new agent calls; useful for smoke/resume validation.")
     parser.add_argument("--force", action="store_true", help="Re-run completed ticker/date rows.")
@@ -643,6 +655,9 @@ def main() -> int:
         llm_provider=args.llm_provider,
         quick_model=args.quick_model,
         deep_model=args.deep_model,
+        evolution_skills_path=args.evolution_skills_jsonl,
+        evolution_skill_max_skills=args.evolution_skill_max_skills,
+        evolution_skill_max_chars=args.evolution_skill_max_chars,
     )
 
     price_end = (datetime.strptime(args.end_date, "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
@@ -680,6 +695,10 @@ def main() -> int:
     print("Data vendors:", base_config["data_vendors"])
     print("Prediction markets enabled:", base_config["enable_prediction_markets"])
     print("US social sources enabled:", base_config["enable_us_social_sources"])
+    print("Evolution skills:", base_config.get("evolution_skills_path") or "disabled")
+    if base_config.get("evolution_skills_path"):
+        print("Evolution skill max skills:", base_config["evolution_skill_max_skills"])
+        print("Evolution skill max chars:", base_config["evolution_skill_max_chars"])
     print("Benchmark policy:", args.benchmark_ticker or "A-share board-aware")
     print("Decision source:", args.decision_source)
     print("Execution policy:", "long/short" if args.allow_short else "long/cash")

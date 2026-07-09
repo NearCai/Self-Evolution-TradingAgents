@@ -30,6 +30,11 @@ from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.evolution.skills import (
+    load_candidate_skill_records,
+    render_skill_context,
+    select_candidate_skills,
+)
 from tradingagents.llm_clients import create_llm_client
 from tradingagents.reporting import write_report_tree
 
@@ -123,6 +128,7 @@ class TradingAgentsGraph:
         self.curr_state = None
         self.ticker = None
         self.log_states_dict = {}  # date to full state dict
+        self._evolution_skill_records: list[dict[str, Any]] | None = None
 
         # Set up the graph: keep the workflow for recompilation with a checkpointer.
         self.workflow = self.graph_setup.setup_graph(selected_analysts)
@@ -433,6 +439,9 @@ class TradingAgentsGraph:
             )
         else:
             past_context = self.memory_log.get_past_context(company_name)
+        evolution_skill_context = ""
+        if self.config.get("evolution_skills_path"):
+            evolution_skill_context = self._get_evolution_skill_context()
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
         init_agent_state = self.propagator.create_initial_state(
             company_name,
@@ -440,6 +449,7 @@ class TradingAgentsGraph:
             asset_type=asset_type,
             past_context=past_context,
             instrument_context=instrument_context,
+            evolution_skill_context=evolution_skill_context,
         )
         args = self.propagator.get_graph_args()
 
@@ -490,6 +500,27 @@ class TradingAgentsGraph:
             )
 
         return final_state, self.process_signal(final_state["final_trade_decision"])
+
+    def _get_evolution_skill_context(self) -> str:
+        skills_path = self.config.get("evolution_skills_path")
+        if not skills_path:
+            return ""
+
+        if self._evolution_skill_records is None:
+            try:
+                self._evolution_skill_records = load_candidate_skill_records(Path(skills_path))
+            except Exception as exc:  # noqa: BLE001 - optional skill context must fail open
+                logger.warning("Failed to load evolution skills from %s: %s", skills_path, exc)
+                self._evolution_skill_records = []
+
+        selected = select_candidate_skills(
+            self._evolution_skill_records,
+            max_skills=int(self.config.get("evolution_skill_max_skills", 3)),
+        )
+        return render_skill_context(
+            selected,
+            max_chars=int(self.config.get("evolution_skill_max_chars", 1800)),
+        )
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""
