@@ -145,3 +145,5 @@ def test_write_experience_artifacts(tmp_path):
     assert (tmp_path / "out" / "trading_experiences.jsonl").exists()
     assert (tmp_path / "out" / "experience_summary.csv").exists()
     assert (tmp_path / "out" / "experience_manifest.json").exists()
+    manifest_file = json.loads((tmp_path / "out" / "experience_manifest.json").read_text(encoding="utf-8"))
+    assert manifest_file["files"]["manifest"].endswith("experience_manifest.json")
