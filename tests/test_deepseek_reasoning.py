@@ -114,6 +114,30 @@ class TestDeepSeekReasoningContent:
         assistant_dicts = [m for m in payload["messages"] if m.get("role") == "assistant"]
         assert assistant_dicts[0]["reasoning_content"] == "weighed bull case"
 
+    def test_deepseek_payload_fills_missing_tool_messages(self):
+        client = self._client()
+        prior = AIMessage(
+            content="",
+            additional_kwargs={
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_stock_data", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "get_indicators", "arguments": "{}"},
+                    },
+                ]
+            },
+        )
+        payload = client._get_request_payload([prior, HumanMessage(content="continue")])
+
+        tool_messages = [m for m in payload["messages"] if m.get("role") == "tool"]
+        assert {m["tool_call_id"] for m in tool_messages} == {"call_1", "call_2"}
+
 
 # ---------------------------------------------------------------------------
 # Capability-driven structured output: tool_choice suppressed for V4 + reasoner
