@@ -4,7 +4,10 @@ import pytest
 
 from tradingagents.evolution.skills import (
     generate_candidate_skills,
+    load_candidate_skill_records,
     load_experience_records,
+    render_skill_context,
+    select_candidate_skills,
     write_skill_artifacts,
 )
 
@@ -86,3 +89,44 @@ def test_skill_artifact_round_trip(tmp_path):
     assert (tmp_path / "skills" / "skill_manifest.json").exists()
     manifest_file = json.loads((tmp_path / "skills" / "skill_manifest.json").read_text(encoding="utf-8"))
     assert manifest_file["files"]["manifest"].endswith("skill_manifest.json")
+
+
+@pytest.mark.unit
+def test_select_and_render_candidate_skill_context(tmp_path):
+    skills_path = tmp_path / "candidate_skills.jsonl"
+    records = [
+        {
+            "skill_id": "caution-rating-hold",
+            "title": "Caution: rating=Hold",
+            "skill_type": "caution",
+            "source_dimension": "rating",
+            "source_value": "Hold",
+            "trigger": "check benchmark edge",
+            "procedure": ["Require a benchmark-relative reason."],
+            "evidence_count": 10,
+            "avg_strategy_vs_benchmark": -0.01,
+        },
+        {
+            "skill_id": "caution-execution-action-sell",
+            "title": "Caution: execution_action=Sell",
+            "skill_type": "caution",
+            "source_dimension": "execution_action",
+            "source_value": "Sell",
+            "trigger": "check missed rebound risk",
+            "procedure": ["Check upside catalyst."],
+            "evidence_count": 5,
+            "avg_strategy_vs_benchmark": -0.03,
+        },
+    ]
+    skills_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_candidate_skill_records(skills_path)
+    selected = select_candidate_skills(loaded, rating="Hold", max_skills=1)
+    context = render_skill_context(selected, max_chars=180)
+
+    assert selected[0]["skill_id"] == "caution-rating-hold"
+    assert "Candidate trading skills" in context
+    assert len(context) <= 180

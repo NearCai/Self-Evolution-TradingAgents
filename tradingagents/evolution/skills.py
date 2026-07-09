@@ -48,6 +48,18 @@ def load_experience_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def load_candidate_skill_records(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing candidate skills JSONL: {path}")
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
 def generate_candidate_skills(
     experiences: list[dict[str, Any]],
     *,
@@ -100,6 +112,61 @@ def generate_candidate_skills(
                 )
             )
     return skills
+
+
+def select_candidate_skills(
+    skills: list[dict[str, Any]],
+    *,
+    rating: str | None = None,
+    execution_action: str | None = None,
+    max_skills: int = 3,
+) -> list[dict[str, Any]]:
+    requested = {
+        ("rating", _clean_value(rating)),
+        ("execution_action", _clean_value(execution_action)),
+    }
+    requested.discard(("rating", ""))
+    requested.discard(("execution_action", ""))
+
+    def sort_key(skill: dict[str, Any]) -> tuple[int, float, int]:
+        exact = (skill.get("source_dimension"), skill.get("source_value")) in requested
+        edge = abs(_to_float(skill.get("avg_strategy_vs_benchmark")) or 0.0)
+        support = int(skill.get("evidence_count") or 0)
+        return (1 if exact else 0, edge, support)
+
+    ranked = sorted(skills, key=sort_key, reverse=True)
+    return ranked[:max(0, max_skills)]
+
+
+def render_skill_context(
+    skills: list[dict[str, Any]],
+    *,
+    max_chars: int = 1800,
+) -> str:
+    if not skills or max_chars == 0:
+        return ""
+
+    lines = [
+        "Candidate trading skills from past backtest experience:",
+        "Use these as soft evidence. Do not follow a skill blindly if current reports conflict.",
+        "",
+    ]
+    for skill in skills:
+        procedure = skill.get("procedure") or []
+        lines.extend(
+            [
+                f"- {skill.get('title', skill.get('skill_id', 'skill'))}",
+                f"  Type: {skill.get('skill_type', 'unknown')}; source: "
+                f"{skill.get('source_dimension')}={skill.get('source_value')}; "
+                f"evidence: {skill.get('evidence_count')} cases; "
+                f"avg vs benchmark: {_format_pct(skill.get('avg_strategy_vs_benchmark'))}.",
+                f"  Trigger: {skill.get('trigger', '')}",
+            ]
+        )
+        if procedure:
+            lines.append("  Procedure: " + " ".join(str(step) for step in procedure))
+    text = "\n".join(lines).strip()
+    return _shorten(text, max_chars)
 
 
 def write_skill_artifacts(
@@ -287,9 +354,13 @@ def _clean_value(value: Any) -> str:
 
 def _shorten(text: str, max_chars: int) -> str:
     text = text.strip()
+    if max_chars <= 0:
+        return ""
     if len(text) <= max_chars:
         return text
-    return text[:max_chars].rstrip() + "..."
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[: max_chars - 3].rstrip() + "..."
 
 
 def _format_pct(value: Any) -> str:
