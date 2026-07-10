@@ -23,6 +23,7 @@ class Propagator:
         past_context: str = "",
         instrument_context: str = "",
         evolution_skill_context: str = "",
+        position_context: str = "",
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -40,6 +41,7 @@ class Propagator:
             "trade_date": str(trade_date),
             "past_context": past_context,
             "evolution_skill_context": evolution_skill_context,
+            "position_context": position_context,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

@@ -44,6 +44,12 @@ def create_portfolio_manager(llm):
             if evolution_skill_context
             else ""
         )
+        position_context = state.get("position_context", "")
+        position_line = (
+            f"- Current simulated portfolio position:\n{position_context}\n"
+            if position_context
+            else ""
+        )
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
@@ -63,6 +69,7 @@ def create_portfolio_manager(llm):
 - Trader's transaction proposal: **{trader_plan}**
 {lessons_line}
 {skill_line}
+{position_line}
 **Risk Analysts Debate History:**
 {history}
 

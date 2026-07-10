@@ -147,6 +147,45 @@ def test_run_agent_decision_records_system_exit(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_run_agent_decision_passes_current_position(monkeypatch, tmp_path):
+    captured = {}
+
+    class CapturingGraph:
+        def __init__(self, *args, **kwargs):
+            captured["config"] = kwargs["config"]
+
+        def propagate(self, *args, **kwargs):
+            return {
+                "final_trade_decision": "**Rating**: Hold",
+                "trader_investment_plan": "**Action**: Hold",
+            }, "Hold"
+
+        def save_reports(self, *args, **kwargs):
+            return tmp_path / "report.md"
+
+    monkeypatch.setattr(continuous, "TradingAgentsGraph", CapturingGraph)
+
+    row, state = continuous.run_agent_decision(
+        {"ticker": "600519.SS", "name": "", "board": "", "sector": ""},
+        "2026-06-01",
+        "2026-06-02",
+        ["market"],
+        tmp_path,
+        {
+            "llm_provider": "deepseek",
+            "quick_think_llm": "quick",
+            "deep_think_llm": "deep",
+        },
+        debug=False,
+        current_position=1.0,
+    )
+
+    assert row.status == "ok"
+    assert state is not None
+    assert captured["config"]["current_position"] == 1.0
+
+
+@pytest.mark.unit
 def test_run_agent_decision_preserves_keyboard_interrupt(monkeypatch, tmp_path):
     class InterruptingGraph:
         def __init__(self, *args, **kwargs):

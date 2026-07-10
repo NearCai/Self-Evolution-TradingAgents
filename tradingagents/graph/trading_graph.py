@@ -442,6 +442,7 @@ class TradingAgentsGraph:
         evolution_skill_context = ""
         if self.config.get("evolution_skills_path"):
             evolution_skill_context = self._get_evolution_skill_context()
+        position_context = self._get_position_context()
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
         init_agent_state = self.propagator.create_initial_state(
             company_name,
@@ -450,6 +451,7 @@ class TradingAgentsGraph:
             past_context=past_context,
             instrument_context=instrument_context,
             evolution_skill_context=evolution_skill_context,
+            position_context=position_context,
         )
         args = self.propagator.get_graph_args()
 
@@ -520,6 +522,24 @@ class TradingAgentsGraph:
         return render_skill_context(
             selected,
             max_chars=int(self.config.get("evolution_skill_max_chars", 1800)),
+        )
+
+    def _get_position_context(self) -> str:
+        if "current_position" not in self.config:
+            return ""
+        try:
+            current_position = float(self.config.get("current_position", 0.0))
+        except (TypeError, ValueError):
+            return ""
+
+        policy = str(self.config.get("execution_policy", "long/cash"))
+        return (
+            f"Position before this decision: {current_position:.2f}. "
+            f"Execution policy: {policy}. In the A-share long/cash setting, "
+            "Buy/Overweight increases long exposure, Sell/Underweight reduces exposure to cash, "
+            "and Hold keeps the current exposure. If the current position is 0.00, Hold means "
+            "remaining in cash and may miss upside; require explicit evidence before choosing "
+            "cash-like Hold during a constructive setup."
         )
 
     def _log_state(self, trade_date, final_state):

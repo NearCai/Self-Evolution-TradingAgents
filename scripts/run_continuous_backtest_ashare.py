@@ -350,6 +350,7 @@ def run_agent_decision(
     config: dict,
     debug: bool,
     decision_source: str = "pm-rating",
+    current_position: float | None = None,
 ) -> tuple[DecisionRow, dict | None]:
     started = datetime.now()
     ticker = item["ticker"]
@@ -374,7 +375,10 @@ def run_agent_decision(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        graph = TradingAgentsGraph(selected_analysts=tuple(analysts), debug=debug, config=config)
+        run_config = copy.deepcopy(config)
+        if current_position is not None:
+            run_config["current_position"] = current_position
+        graph = TradingAgentsGraph(selected_analysts=tuple(analysts), debug=debug, config=run_config)
         final_state, decision = graph.propagate(ticker, date, asset_type="stock")
         rating = parse_rating(final_state.get("final_trade_decision", ""), default=decision or "Hold")
         trader_action = extract_trader_action(final_state, rating)
@@ -659,6 +663,7 @@ def main() -> int:
         evolution_skill_max_skills=args.evolution_skill_max_skills,
         evolution_skill_max_chars=args.evolution_skill_max_chars,
     )
+    base_config["execution_policy"] = "long/short" if args.allow_short else "long/cash"
 
     price_end = (datetime.strptime(args.end_date, "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
     prices: dict[str, dict[str, float]] = {}
@@ -763,6 +768,7 @@ def main() -> int:
                 base_config,
                 args.debug,
                 args.decision_source,
+                current_position=positions[ticker],
             )
             new_runs += 1
 

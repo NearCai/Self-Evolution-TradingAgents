@@ -75,3 +75,4 @@ class AgentState(MessagesState):
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
     evolution_skill_context: Annotated[str, "Candidate trading skill context injected at run start"]
+    position_context: Annotated[str, "Current simulated position context injected at run start"]
