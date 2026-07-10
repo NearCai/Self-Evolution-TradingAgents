@@ -92,6 +92,39 @@ def test_skill_artifact_round_trip(tmp_path):
 
 
 @pytest.mark.unit
+def test_generate_candidate_skills_adds_cash_drag_opportunity():
+    experiences = [
+        {
+            **_experience(action="Hold", rating="Hold", label="failure", edge=-0.02),
+            "position_after": 0.0,
+            "stock_return_next": 0.012,
+            "benchmark_return_next": 0.014,
+            "strategy_vs_buy_hold": -0.012,
+        },
+        {
+            **_experience(action="Sell", rating="Underweight", label="failure", edge=-0.01),
+            "position_after": 0.0,
+            "stock_return_next": 0.006,
+            "benchmark_return_next": 0.011,
+            "strategy_vs_buy_hold": -0.006,
+        },
+    ]
+
+    skills = generate_candidate_skills(
+        experiences,
+        min_support=2,
+        missed_upside_return=0.005,
+    )
+
+    opportunity_skills = [skill for skill in skills if skill.skill_type == "opportunity"]
+    assert {skill.source_value for skill in opportunity_skills} == {
+        "positive_benchmark_interval",
+        "positive_stock_interval",
+    }
+    assert all("cash" in skill.trigger.lower() for skill in opportunity_skills)
+
+
+@pytest.mark.unit
 def test_select_and_render_candidate_skill_context(tmp_path):
     skills_path = tmp_path / "candidate_skills.jsonl"
     records = [
@@ -130,3 +163,31 @@ def test_select_and_render_candidate_skill_context(tmp_path):
     assert selected[0]["skill_id"] == "caution-rating-hold"
     assert "Candidate trading skills" in context
     assert len(context) <= 180
+
+
+@pytest.mark.unit
+def test_select_candidate_skills_keeps_opportunity_when_unfiltered():
+    skills = [
+        {
+            "skill_id": "caution-rating-hold",
+            "skill_type": "caution",
+            "source_dimension": "rating",
+            "source_value": "Hold",
+            "evidence_count": 100,
+            "avg_strategy_vs_benchmark": -0.03,
+        },
+        {
+            "skill_id": "opportunity-cash-drag-positive-benchmark-interval",
+            "skill_type": "opportunity",
+            "source_dimension": "cash_drag",
+            "source_value": "positive_benchmark_interval",
+            "evidence_count": 20,
+            "avg_strategy_vs_benchmark": -0.01,
+            "avg_strategy_vs_buy_hold": -0.02,
+        },
+    ]
+
+    selected = select_candidate_skills(skills, max_skills=2)
+
+    assert selected[0]["skill_type"] == "opportunity"
+    assert selected[1]["skill_type"] == "caution"

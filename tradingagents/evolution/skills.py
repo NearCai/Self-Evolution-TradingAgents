@@ -66,6 +66,7 @@ def generate_candidate_skills(
     min_support: int = 5,
     promote_success_rate: float = 0.55,
     warn_failure_rate: float = 0.50,
+    missed_upside_return: float = 0.005,
     max_examples: int = 3,
 ) -> list[CandidateTradingSkill]:
     skills: list[CandidateTradingSkill] = []
@@ -111,6 +112,14 @@ def generate_candidate_skills(
                     example_experiences=_select_examples(group, skill_type, max_examples),
                 )
             )
+    skills.extend(
+        _generate_cash_drag_skills(
+            experiences,
+            min_support=min_support,
+            missed_upside_return=missed_upside_return,
+            max_examples=max_examples,
+        )
+    )
     return skills
 
 
@@ -130,11 +139,16 @@ def select_candidate_skills(
 
     def sort_key(skill: dict[str, Any]) -> tuple[int, float, int]:
         exact = (skill.get("source_dimension"), skill.get("source_value")) in requested
-        edge = abs(_to_float(skill.get("avg_strategy_vs_benchmark")) or 0.0)
+        edge = max(
+            abs(_to_float(skill.get("avg_strategy_vs_benchmark")) or 0.0),
+            abs(_to_float(skill.get("avg_strategy_vs_buy_hold")) or 0.0),
+        )
         support = int(skill.get("evidence_count") or 0)
         return (1 if exact else 0, edge, support)
 
     ranked = sorted(skills, key=sort_key, reverse=True)
+    if not requested:
+        return _select_diverse_skills(ranked, max_skills)
     return ranked[:max(0, max_skills)]
 
 
@@ -199,6 +213,91 @@ def write_skill_artifacts(
     return manifest
 
 
+def _generate_cash_drag_skills(
+    experiences: list[dict[str, Any]],
+    *,
+    min_support: int,
+    missed_upside_return: float,
+    max_examples: int,
+) -> list[CandidateTradingSkill]:
+    definitions = [
+        (
+            "cash_drag",
+            "positive_stock_interval",
+            "Avoid unexamined cash drag when the stock setup can still rise",
+            lambda item: (
+                (_to_float(item.get("position_after")) or 0.0) == 0.0
+                and (_to_float(item.get("stock_return_next")) or 0.0) >= missed_upside_return
+            ),
+        ),
+        (
+            "cash_drag",
+            "positive_benchmark_interval",
+            "Avoid unexamined cash drag during broad market strength",
+            lambda item: (
+                (_to_float(item.get("position_after")) or 0.0) == 0.0
+                and (_to_float(item.get("benchmark_return_next")) or 0.0) >= missed_upside_return
+            ),
+        ),
+    ]
+    skills: list[CandidateTradingSkill] = []
+    for dimension, value, title, predicate in definitions:
+        group = [item for item in experiences if predicate(item)]
+        if len(group) < min_support:
+            continue
+        summary = _summarize_group(group)
+        skills.append(
+            CandidateTradingSkill(
+                skill_id=_skill_id("opportunity", dimension, value),
+                title=f"Opportunity: {title}",
+                skill_type="opportunity",
+                source_dimension=dimension,
+                source_value=value,
+                trigger=_cash_drag_trigger(value, missed_upside_return),
+                procedure=_cash_drag_procedure(value),
+                evidence_count=len(group),
+                success_count=summary["labels"].get("success", 0),
+                failure_count=summary["labels"].get("failure", 0),
+                neutral_count=summary["labels"].get("neutral", 0),
+                success_rate=summary["success_rate"],
+                failure_rate=summary["failure_rate"],
+                avg_strategy_vs_benchmark=summary["avg_strategy_vs_benchmark"],
+                avg_strategy_vs_buy_hold=summary["avg_strategy_vs_buy_hold"],
+                avg_stock_return_next=summary["avg_stock_return_next"],
+                tickers=summary["tickers"],
+                example_experiences=_select_cash_drag_examples(group, max_examples),
+            )
+        )
+    return skills
+
+
+def _select_diverse_skills(
+    ranked: list[dict[str, Any]],
+    max_skills: int,
+) -> list[dict[str, Any]]:
+    if max_skills <= 0:
+        return []
+
+    selected: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    for skill_type in ("opportunity", "promote", "caution"):
+        match = next((skill for skill in ranked if skill.get("skill_type") == skill_type), None)
+        if match:
+            selected.append(match)
+            used_ids.add(str(match.get("skill_id")))
+            if len(selected) >= max_skills:
+                return selected
+
+    for skill in ranked:
+        skill_id = str(skill.get("skill_id"))
+        if skill_id in used_ids:
+            continue
+        selected.append(skill)
+        if len(selected) >= max_skills:
+            break
+    return selected
+
+
 def _summarize_group(group: list[dict[str, Any]]) -> dict[str, Any]:
     labels = Counter(_clean_value(item.get("outcome_label")) for item in group)
     evidence_count = len(group)
@@ -254,6 +353,34 @@ def _select_examples(
     ]
 
 
+def _select_cash_drag_examples(
+    group: list[dict[str, Any]],
+    max_examples: int,
+) -> list[dict[str, Any]]:
+    ranked = sorted(
+        group,
+        key=lambda item: max(
+            abs(_to_float(item.get("strategy_vs_benchmark")) or 0.0),
+            abs(_to_float(item.get("strategy_vs_buy_hold")) or 0.0),
+        ),
+        reverse=True,
+    )
+    examples = ranked[:max_examples]
+    return [
+        {
+            "ticker": item.get("ticker"),
+            "analysis_date": item.get("analysis_date"),
+            "rating": item.get("rating"),
+            "execution_action": item.get("execution_action"),
+            "strategy_vs_benchmark": item.get("strategy_vs_benchmark"),
+            "strategy_vs_buy_hold": item.get("strategy_vs_buy_hold"),
+            "outcome_reason": item.get("outcome_reason"),
+            "reflection": _shorten(str(item.get("reflection") or ""), 400),
+        }
+        for item in examples
+    ]
+
+
 def _trigger(skill_type: str, dimension: str, value: str) -> str:
     if skill_type == "promote":
         return (
@@ -263,6 +390,15 @@ def _trigger(skill_type: str, dimension: str, value: str) -> str:
     return (
         f"When the agent is about to choose {dimension}={value}, require an explicit "
         "benchmark-relative reason and a downside/upside catalyst check before acting."
+    )
+
+
+def _cash_drag_trigger(value: str, threshold: float) -> str:
+    target = "stock" if value == "positive_stock_interval" else "benchmark"
+    return (
+        f"When the current position is cash-like and the {target} setup may rise by at least "
+        f"{threshold:.1%} over the next interval, do not let caution skills alone justify "
+        "Hold/Sell. Treat cash drag as an explicit risk."
     )
 
 
@@ -277,6 +413,15 @@ def _procedure(skill_type: str, dimension: str, value: str) -> list[str]:
         "Treat the historical pattern as a warning rather than a hard ban.",
         "Look for missed rebound risk, benchmark strength, and whether cash/long exposure is being overused.",
         f"Only keep {dimension}={value} when the report names a concrete catalyst and a benchmark-relative edge.",
+    ]
+
+
+def _cash_drag_procedure(value: str) -> list[str]:
+    reference = "stock's own rebound potential" if value == "positive_stock_interval" else "benchmark strength"
+    return [
+        f"Check whether the analyst reports contain concrete evidence against the {reference}.",
+        "If the position is 0.00, interpret Hold as an active cash decision rather than a neutral action.",
+        "When downside evidence is weak and upside/benchmark momentum is constructive, consider a starter long or Overweight instead of defaulting to cash.",
     ]
 
 

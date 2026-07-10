@@ -57,6 +57,12 @@ def main() -> int:
         default=0.50,
         help="Failure-rate threshold for caution skills.",
     )
+    parser.add_argument(
+        "--missed-upside-return",
+        type=float,
+        default=0.005,
+        help="Next-interval stock/benchmark return threshold for cash-drag opportunity skills.",
+    )
     args = parser.parse_args()
 
     experience_path = Path(args.experience_jsonl)
@@ -72,6 +78,7 @@ def main() -> int:
         min_support=args.min_support,
         promote_success_rate=args.promote_success_rate,
         warn_failure_rate=args.warn_failure_rate,
+        missed_upside_return=args.missed_upside_return,
     )
     manifest = write_skill_artifacts(skills, output_dir)
 
