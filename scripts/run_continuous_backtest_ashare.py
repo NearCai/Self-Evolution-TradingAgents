@@ -312,6 +312,7 @@ def build_backtest_config(
     evolution_skills_path: str | None = None,
     evolution_skill_max_skills: int = 3,
     evolution_skill_max_chars: int = 1800,
+    evolution_skill_allowed_types: list[str] | None = None,
 ) -> dict:
     base_config = copy.deepcopy(DEFAULT_CONFIG)
     base_config["results_dir"] = str(output_dir / "_graph_logs")
@@ -323,6 +324,7 @@ def build_backtest_config(
     base_config["evolution_skills_path"] = evolution_skills_path
     base_config["evolution_skill_max_skills"] = evolution_skill_max_skills
     base_config["evolution_skill_max_chars"] = evolution_skill_max_chars
+    base_config["evolution_skill_allowed_types"] = evolution_skill_allowed_types
     if llm_provider:
         base_config["llm_provider"] = llm_provider
     if quick_model:
@@ -621,6 +623,8 @@ def main() -> int:
                         help="Maximum candidate skills injected per agent decision.")
     parser.add_argument("--evolution-skill-max-chars", type=int, default=1800,
                         help="Maximum characters for injected candidate skill context.")
+    parser.add_argument("--evolution-skill-types", default=None,
+                        help="Optional comma-separated skill types to inject, e.g. opportunity,promote.")
     parser.add_argument("--max-runs", type=int, default=None,
                         help="Stop after this many new agent calls; useful for smoke/resume validation.")
     parser.add_argument("--force", action="store_true", help="Re-run completed ticker/date rows.")
@@ -662,6 +666,9 @@ def main() -> int:
         evolution_skills_path=args.evolution_skills_jsonl,
         evolution_skill_max_skills=args.evolution_skill_max_skills,
         evolution_skill_max_chars=args.evolution_skill_max_chars,
+        evolution_skill_allowed_types=parse_csv_arg(args.evolution_skill_types, [])
+        if args.evolution_skill_types
+        else None,
     )
     base_config["execution_policy"] = "long/short" if args.allow_short else "long/cash"
 
@@ -704,6 +711,7 @@ def main() -> int:
     if base_config.get("evolution_skills_path"):
         print("Evolution skill max skills:", base_config["evolution_skill_max_skills"])
         print("Evolution skill max chars:", base_config["evolution_skill_max_chars"])
+        print("Evolution skill types:", base_config.get("evolution_skill_allowed_types") or "all")
     print("Benchmark policy:", args.benchmark_ticker or "A-share board-aware")
     print("Decision source:", args.decision_source)
     print("Execution policy:", "long/short" if args.allow_short else "long/cash")

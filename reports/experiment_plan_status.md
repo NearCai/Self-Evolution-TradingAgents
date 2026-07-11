@@ -62,6 +62,7 @@ The current verified evidence supports the following claims:
 |---|---|---|---|---|
 | `[x]` | Accepted-skill engineering validation on a later window | Check whether verifier-accepted skills remain useful outside the first two-week window. | `results/continuous_ashare_2026_05_2w_deepseek_accepted_skill_main3_mf_pm` | Completed. Result was weak/inconclusive because the strategy stayed in cash. |
 | `[x]` | Strengthen verifier gates | Avoid accepting zero-activity runs as meaningful improvements. Add research-gate checks: minimum return delta, position-utilization floor, trade floor, cash-drag no-worsening, and positive changed-decision contribution. | `skill_verification_research_gate` outputs | Completed. Use `--gate-preset research` for research-grade skill selection. |
+| `[x]` | Opportunity-focused skill injection control | Improve the next self-evolution experiment by allowing formal runs to inject only opportunity/promote skills and avoid caution-heavy cash behavior. | Code option: `--evolution-skill-types opportunity,promote` | Completed. Use this in walk-forward validation/test runs to reduce all-cash collapse risk. |
 | `[ ]` | No-lookahead April-only skill generation | Generate skills using only an earlier training window. | `results/walkforward_2026_q2/train_2026_04_skills` or equivalent | Date filtering is now available; ready to run. |
 | `[ ]` | Walk-forward validation window | Use April-generated skills on May and select only skills that pass verifier. | `results/walkforward_2026_q2/val_2026_05_skill_selected` | Requires no-lookahead April skills. |
 | `[ ]` | Walk-forward final test window | Evaluate verifier-selected skills on June without modifying them. | `results/walkforward_2026_q2/test_2026_06_skill_selected` | Requires validation-selected accepted skills. |
@@ -270,3 +271,13 @@ python scripts\generate_trading_skills.py `
   --output-dir E:\TradingAgents\Self-Evolution-TradingAgents\results\walkforward_2026_q2\train_2026_04_skills `
   --missed-upside-return 0.005
 ```
+
+Formal self-evolution backtests should use opportunity-focused skill injection:
+
+```powershell
+--evolution-skill-types opportunity,promote
+```
+
+This keeps the self-evolution prompt focused on missed-upside and active
+participation skills, while avoiding the earlier caution-heavy behavior that
+made the agent collapse into cash.

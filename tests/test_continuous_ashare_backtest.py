@@ -102,11 +102,13 @@ def test_build_backtest_config_can_enable_evolution_skills(tmp_path):
         evolution_skills_path=str(skills_path),
         evolution_skill_max_skills=2,
         evolution_skill_max_chars=900,
+        evolution_skill_allowed_types=["opportunity", "promote"],
     )
 
     assert cfg["evolution_skills_path"] == str(skills_path)
     assert cfg["evolution_skill_max_skills"] == 2
     assert cfg["evolution_skill_max_chars"] == 900
+    assert cfg["evolution_skill_allowed_types"] == ["opportunity", "promote"]
 
 
 @pytest.mark.unit

@@ -191,3 +191,35 @@ def test_select_candidate_skills_keeps_opportunity_when_unfiltered():
 
     assert selected[0]["skill_type"] == "opportunity"
     assert selected[1]["skill_type"] == "caution"
+
+
+@pytest.mark.unit
+def test_select_candidate_skills_filters_allowed_skill_types():
+    skills = [
+        {
+            "skill_id": "caution-rating-hold",
+            "skill_type": "caution",
+            "source_dimension": "rating",
+            "source_value": "Hold",
+            "evidence_count": 100,
+            "avg_strategy_vs_benchmark": -0.03,
+        },
+        {
+            "skill_id": "opportunity-cash-drag-positive-stock-interval",
+            "skill_type": "opportunity",
+            "source_dimension": "cash_drag",
+            "source_value": "positive_stock_interval",
+            "evidence_count": 20,
+            "avg_strategy_vs_benchmark": 0.01,
+        },
+    ]
+
+    selected = select_candidate_skills(
+        skills,
+        allowed_skill_types=["opportunity", "promote"],
+        max_skills=2,
+    )
+
+    assert [skill["skill_id"] for skill in selected] == [
+        "opportunity-cash-drag-positive-stock-interval"
+    ]

@@ -128,8 +128,17 @@ def select_candidate_skills(
     *,
     rating: str | None = None,
     execution_action: str | None = None,
+    allowed_skill_types: list[str] | tuple[str, ...] | set[str] | None = None,
     max_skills: int = 3,
 ) -> list[dict[str, Any]]:
+    allowed_types = {_clean_value(item).lower() for item in (allowed_skill_types or [])}
+    if allowed_types:
+        skills = [
+            skill
+            for skill in skills
+            if _clean_value(skill.get("skill_type")).lower() in allowed_types
+        ]
+
     requested = {
         ("rating", _clean_value(rating)),
         ("execution_action", _clean_value(execution_action)),
@@ -163,6 +172,7 @@ def render_skill_context(
     lines = [
         "Candidate trading skills from past backtest experience:",
         "Use these as soft evidence. Do not follow a skill blindly if current reports conflict.",
+        "Opportunity skills should explicitly challenge cash-like Hold/Sell decisions when upside evidence is not refuted.",
         "",
     ]
     for skill in skills:
@@ -421,7 +431,8 @@ def _cash_drag_procedure(value: str) -> list[str]:
     return [
         f"Check whether the analyst reports contain concrete evidence against the {reference}.",
         "If the position is 0.00, interpret Hold as an active cash decision rather than a neutral action.",
-        "When downside evidence is weak and upside/benchmark momentum is constructive, consider a starter long or Overweight instead of defaulting to cash.",
+        "When downside evidence is weak and upside/benchmark momentum is constructive, explicitly evaluate a starter long or Overweight before choosing cash.",
+        "Only remain in cash when the final decision names a concrete downside catalyst that outweighs missed-upside risk.",
     ]
 
 
