@@ -42,6 +42,16 @@ def main() -> int:
         help="Max characters kept from each report/decision text section.",
     )
     parser.add_argument(
+        "--start-date",
+        default=None,
+        help="Optional inclusive analysis-date lower bound, e.g. 2026-04-01.",
+    )
+    parser.add_argument(
+        "--end-date",
+        default=None,
+        help="Optional inclusive analysis-date upper bound, e.g. 2026-04-30.",
+    )
+    parser.add_argument(
         "--include-errors",
         action="store_true",
         help="Include non-ok rows. Default keeps only successful agent decisions.",
@@ -55,12 +65,25 @@ def main() -> int:
         result_dir,
         max_text_chars=args.max_text_chars,
         require_ok=not args.include_errors,
+        start_date=args.start_date,
+        end_date=args.end_date,
     )
-    manifest = write_experience_artifacts(experiences, output_dir)
+    manifest = write_experience_artifacts(
+        experiences,
+        output_dir,
+        metadata={
+            "source_result_dir": str(result_dir),
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+            "require_ok": not args.include_errors,
+            "max_text_chars": args.max_text_chars,
+        },
+    )
 
     print("Trading experience builder")
     print("Result dir:", result_dir)
     print("Output dir:", output_dir)
+    print("Date filter:", f"{args.start_date or '-inf'} to {args.end_date or '+inf'}")
     print("Experiences:", manifest["experience_count"])
     print("Labels:", json.dumps(manifest["label_counts"], ensure_ascii=False, sort_keys=True))
     print("Tickers:", json.dumps(manifest["ticker_counts"], ensure_ascii=False, sort_keys=True))

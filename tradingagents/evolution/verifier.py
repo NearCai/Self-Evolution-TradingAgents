@@ -22,6 +22,27 @@ class VerificationThresholds:
     max_cash_drag_delta: int = 1
     max_turnover_delta: float = 0.25
     cash_up_threshold: float = 0.005
+    min_avg_position_after: float | None = None
+    min_active_decision_ratio: float | None = None
+    min_trade_count: int = 0
+    min_decision_change_count: int = 0
+    min_positive_changed_decision_count: int = 0
+    min_changed_return_delta: float | None = None
+
+
+RESEARCH_GATE_THRESHOLDS = VerificationThresholds(
+    min_return_delta=0.001,
+    max_drawdown_worsening=0.005,
+    max_cash_drag_delta=0,
+    max_turnover_delta=0.25,
+    cash_up_threshold=0.005,
+    min_avg_position_after=0.03,
+    min_active_decision_ratio=0.05,
+    min_trade_count=1,
+    min_decision_change_count=1,
+    min_positive_changed_decision_count=1,
+    min_changed_return_delta=0.001,
+)
 
 
 @dataclass(frozen=True)
@@ -43,12 +64,31 @@ class DecisionDiagnostics:
     rating_counts: dict[str, int]
     avg_position_after: float | None
     avg_turnover: float | None
+    active_position_count: int
+    active_position_ratio: float | None
+    trade_count: int
+    cash_up_interval_count: int
     cash_stock_up_count: int
     cash_benchmark_up_count: int
 
     @property
     def cash_drag_count(self) -> int:
-        return self.cash_stock_up_count + self.cash_benchmark_up_count
+        return self.cash_up_interval_count
+
+
+@dataclass(frozen=True)
+class DecisionChangeDiagnostics:
+    comparable_decision_count: int
+    changed_decision_count: int
+    changed_action_count: int
+    changed_rating_count: int
+    changed_position_count: int
+    positive_changed_decision_count: int
+    negative_changed_decision_count: int
+    neutral_changed_decision_count: int
+    changed_return_delta_sum: float
+    changed_return_delta_mean: float | None
+    positive_change_hit_rate: float | None
 
 
 @dataclass(frozen=True)
@@ -72,8 +112,13 @@ class SkillVerificationResult:
     evolved_metrics: PortfolioSnapshot
     baseline_diagnostics: DecisionDiagnostics
     evolved_diagnostics: DecisionDiagnostics
+    change_diagnostics: DecisionChangeDiagnostics
     gates: list[GateResult]
     passed: bool
+
+
+def research_gate_thresholds() -> VerificationThresholds:
+    return RESEARCH_GATE_THRESHOLDS
 
 
 def verify_skill_experiment(
@@ -100,6 +145,7 @@ def verify_skill_experiment(
     evolved_metrics = _portfolio_snapshot(evolved_daily, "strategy_return")
     baseline_diag = _decision_diagnostics(baseline_decisions, thresholds.cash_up_threshold)
     evolved_diag = _decision_diagnostics(evolved_decisions, thresholds.cash_up_threshold)
+    change_diag = _decision_change_diagnostics(baseline_decisions, evolved_decisions)
     skills = _load_skill_records(skills_jsonl) if skills_jsonl else []
 
     gates = _build_gates(
@@ -111,6 +157,7 @@ def verify_skill_experiment(
         evolved_metrics=evolved_metrics,
         baseline_diag=baseline_diag,
         evolved_diag=evolved_diag,
+        change_diag=change_diag,
         skill_count=len(skills),
         skills_required=skills_jsonl is not None,
         thresholds=thresholds,
@@ -126,6 +173,7 @@ def verify_skill_experiment(
         evolved_metrics=evolved_metrics,
         baseline_diagnostics=baseline_diag,
         evolved_diagnostics=evolved_diag,
+        change_diagnostics=change_diag,
         gates=gates,
         passed=passed,
     )
@@ -172,6 +220,7 @@ def _build_gates(
     evolved_metrics: PortfolioSnapshot,
     baseline_diag: DecisionDiagnostics,
     evolved_diag: DecisionDiagnostics,
+    change_diag: DecisionChangeDiagnostics,
     skill_count: int,
     skills_required: bool,
     thresholds: VerificationThresholds,
@@ -210,6 +259,7 @@ def _build_gates(
                 message="A skill file was supplied and must contain at least one candidate skill.",
             )
         )
+
     return_delta = evolved_metrics.cumulative_return - baseline_metrics.cumulative_return
     gates.append(
         GateResult(
@@ -221,6 +271,7 @@ def _build_gates(
             message="Evolved strategy cumulative return must not trail the matched baseline.",
         )
     )
+
     drawdown_worsening = baseline_metrics.max_drawdown - evolved_metrics.max_drawdown
     gates.append(
         GateResult(
@@ -232,6 +283,7 @@ def _build_gates(
             message="Evolved strategy may not worsen max drawdown beyond the tolerance.",
         )
     )
+
     cash_drag_delta = evolved_diag.cash_drag_count - baseline_diag.cash_drag_count
     gates.append(
         GateResult(
@@ -243,6 +295,79 @@ def _build_gates(
             message="Evolved strategy should not create materially more cash-drag intervals.",
         )
     )
+
+    if thresholds.min_avg_position_after is not None:
+        avg_position = evolved_diag.avg_position_after or 0.0
+        gates.append(
+            GateResult(
+                name="avg_position_floor",
+                passed=avg_position >= thresholds.min_avg_position_after,
+                baseline_value=baseline_diag.avg_position_after,
+                evolved_value=evolved_diag.avg_position_after,
+                threshold=thresholds.min_avg_position_after,
+                message="Evolved strategy must keep a minimum average active exposure.",
+            )
+        )
+    if thresholds.min_active_decision_ratio is not None:
+        active_ratio = evolved_diag.active_position_ratio or 0.0
+        gates.append(
+            GateResult(
+                name="active_decision_floor",
+                passed=active_ratio >= thresholds.min_active_decision_ratio,
+                baseline_value=baseline_diag.active_position_ratio,
+                evolved_value=evolved_diag.active_position_ratio,
+                threshold=thresholds.min_active_decision_ratio,
+                message="Evolved strategy must not collapse into all-cash decisions.",
+            )
+        )
+    if thresholds.min_trade_count > 0:
+        gates.append(
+            GateResult(
+                name="trade_activity_floor",
+                passed=evolved_diag.trade_count >= thresholds.min_trade_count,
+                baseline_value=baseline_diag.trade_count,
+                evolved_value=evolved_diag.trade_count,
+                threshold=thresholds.min_trade_count,
+                message="Evolved strategy must include at least a minimal number of effective position changes.",
+            )
+        )
+    if thresholds.min_decision_change_count > 0:
+        gates.append(
+            GateResult(
+                name="decision_change_floor",
+                passed=change_diag.changed_decision_count >= thresholds.min_decision_change_count,
+                baseline_value=0,
+                evolved_value=change_diag.changed_decision_count,
+                threshold=thresholds.min_decision_change_count,
+                message="Injected skills must change at least some matched decisions versus baseline.",
+            )
+        )
+    if thresholds.min_positive_changed_decision_count > 0:
+        gates.append(
+            GateResult(
+                name="positive_change_floor",
+                passed=(
+                    change_diag.positive_changed_decision_count
+                    >= thresholds.min_positive_changed_decision_count
+                ),
+                baseline_value=0,
+                evolved_value=change_diag.positive_changed_decision_count,
+                threshold=thresholds.min_positive_changed_decision_count,
+                message="At least one skill-induced decision change should improve next-interval return.",
+            )
+        )
+    if thresholds.min_changed_return_delta is not None:
+        gates.append(
+            GateResult(
+                name="changed_return_delta_guard",
+                passed=change_diag.changed_return_delta_sum >= thresholds.min_changed_return_delta,
+                baseline_value=0,
+                evolved_value=change_diag.changed_return_delta_sum,
+                threshold=thresholds.min_changed_return_delta,
+                message="Aggregate return contribution from changed decisions must be positive enough.",
+            )
+        )
+
     turnover_delta = _none_safe_subtract(evolved_diag.avg_turnover, baseline_diag.avg_turnover)
     gates.append(
         GateResult(
@@ -340,15 +465,22 @@ def _decision_diagnostics(
         after = _to_float(row.get("position_after"))
         if before is not None and after is not None:
             turnovers.append(abs(after - before))
+    active_position_count = sum(1 for value in positions if abs(value) > 1e-9)
+    trade_count = sum(1 for value in turnovers if value > 1e-9)
+    cash_up_intervals = 0
     cash_stock_up = 0
     cash_benchmark_up = 0
     for row in rows:
         position = _to_float(row.get("position_after")) or 0.0
-        if position != 0.0:
+        if abs(position) > 1e-9:
             continue
-        if (_to_float(row.get("stock_return_next")) or 0.0) >= cash_up_threshold:
+        stock_up = (_to_float(row.get("stock_return_next")) or 0.0) >= cash_up_threshold
+        benchmark_up = (_to_float(row.get("benchmark_return_next")) or 0.0) >= cash_up_threshold
+        if stock_up or benchmark_up:
+            cash_up_intervals += 1
+        if stock_up:
             cash_stock_up += 1
-        if (_to_float(row.get("benchmark_return_next")) or 0.0) >= cash_up_threshold:
+        if benchmark_up:
             cash_benchmark_up += 1
     return DecisionDiagnostics(
         decision_count=len(rows),
@@ -360,9 +492,81 @@ def _decision_diagnostics(
         rating_counts=dict(sorted(Counter(row.get("rating", "") for row in rows).items())),
         avg_position_after=(sum(positions) / len(positions)) if positions else None,
         avg_turnover=(sum(turnovers) / len(turnovers)) if turnovers else None,
+        active_position_count=active_position_count,
+        active_position_ratio=(active_position_count / len(positions)) if positions else None,
+        trade_count=trade_count,
+        cash_up_interval_count=cash_up_intervals,
         cash_stock_up_count=cash_stock_up,
         cash_benchmark_up_count=cash_benchmark_up,
     )
+
+
+def _decision_change_diagnostics(
+    baseline_rows: list[dict[str, str]],
+    evolved_rows: list[dict[str, str]],
+) -> DecisionChangeDiagnostics:
+    baseline_by_key = {
+        (row.get("ticker", ""), row.get("analysis_date", "")): row for row in baseline_rows
+    }
+    comparable = 0
+    changed = 0
+    changed_actions = 0
+    changed_ratings = 0
+    changed_positions = 0
+    deltas: list[float] = []
+    for evolved in evolved_rows:
+        key = (evolved.get("ticker", ""), evolved.get("analysis_date", ""))
+        baseline = baseline_by_key.get(key)
+        if baseline is None:
+            continue
+        comparable += 1
+        action_changed = _normalize_text(baseline.get("execution_action")) != _normalize_text(
+            evolved.get("execution_action")
+        )
+        rating_changed = _normalize_text(baseline.get("rating")) != _normalize_text(
+            evolved.get("rating")
+        )
+        position_changed = _float_changed(
+            _to_float(baseline.get("position_after")),
+            _to_float(evolved.get("position_after")),
+        )
+        if not (action_changed or rating_changed or position_changed):
+            continue
+        changed += 1
+        changed_actions += int(action_changed)
+        changed_ratings += int(rating_changed)
+        changed_positions += int(position_changed)
+        deltas.append(
+            (_to_float(evolved.get("strategy_return_next")) or 0.0)
+            - (_to_float(baseline.get("strategy_return_next")) or 0.0)
+        )
+    positive = sum(1 for value in deltas if value > 1e-12)
+    negative = sum(1 for value in deltas if value < -1e-12)
+    neutral = changed - positive - negative
+    delta_sum = sum(deltas)
+    return DecisionChangeDiagnostics(
+        comparable_decision_count=comparable,
+        changed_decision_count=changed,
+        changed_action_count=changed_actions,
+        changed_rating_count=changed_ratings,
+        changed_position_count=changed_positions,
+        positive_changed_decision_count=positive,
+        negative_changed_decision_count=negative,
+        neutral_changed_decision_count=neutral,
+        changed_return_delta_sum=delta_sum,
+        changed_return_delta_mean=(delta_sum / changed) if changed else None,
+        positive_change_hit_rate=(positive / changed) if changed else None,
+    )
+
+
+def _normalize_text(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _float_changed(left: float | None, right: float | None) -> bool:
+    if left is None and right is None:
+        return False
+    return abs((left or 0.0) - (right or 0.0)) > 1e-9
 
 
 def _load_skill_records(path: Path | None) -> list[dict[str, Any]]:
@@ -381,6 +585,7 @@ def _load_skill_records(path: Path | None) -> list[dict[str, Any]]:
 
 def _render_markdown(result: SkillVerificationResult) -> str:
     status = "PASSED" if result.passed else "FAILED"
+    change = result.change_diagnostics
     lines = [
         "# Trading Skill Verification",
         "",
@@ -401,10 +606,19 @@ def _render_markdown(result: SkillVerificationResult) -> str:
         "",
         "## Decision Diagnostics",
         "",
-        "| Run | Decisions | OK | Avg Position | Avg Turnover | Cash Drag | Actions |",
-        "|---|---:|---:|---:|---:|---:|---|",
+        "| Run | Decisions | OK | Avg Position | Active | Trades | Avg Turnover | Cash Drag | Actions |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
         _diagnostic_row("Baseline", result.baseline_diagnostics),
         _diagnostic_row("Evolved", result.evolved_diagnostics),
+        "",
+        "## Decision Change Diagnostics",
+        "",
+        f"- Comparable decisions: {change.comparable_decision_count}",
+        f"- Changed decisions: {change.changed_decision_count}",
+        f"- Positive / negative / neutral changes: {change.positive_changed_decision_count} / "
+        f"{change.negative_changed_decision_count} / {change.neutral_changed_decision_count}",
+        f"- Positive hit rate: {_format_pct(change.positive_change_hit_rate)}",
+        f"- Changed-decision return delta: {_format_pct(change.changed_return_delta_sum)}",
         "",
         "## Gates",
         "",
@@ -434,10 +648,11 @@ def _metric_row(name: str, snapshot: PortfolioSnapshot) -> str:
 
 def _diagnostic_row(name: str, diag: DecisionDiagnostics) -> str:
     actions = ", ".join(f"{key}:{value}" for key, value in diag.execution_action_counts.items())
+    active = f"{diag.active_position_count} ({_format_pct(diag.active_position_ratio)})"
     return (
         f"| {name} | {diag.decision_count} | {diag.ok_count} | "
-        f"{_format_float(diag.avg_position_after)} | {_format_float(diag.avg_turnover)} | "
-        f"{diag.cash_drag_count} | {actions} |"
+        f"{_format_float(diag.avg_position_after)} | {active} | {diag.trade_count} | "
+        f"{_format_float(diag.avg_turnover)} | {diag.cash_drag_count} | {actions} |"
     )
 
 

@@ -79,11 +79,15 @@ def build_experiences(
     *,
     max_text_chars: int = 1200,
     require_ok: bool = True,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> list[TradingExperience]:
     rows = read_decision_rows(result_dir)
     reflections = load_memory_reflections(result_dir)
     experiences: list[TradingExperience] = []
     for row in rows:
+        if not _date_in_range(row.get("analysis_date"), start_date, end_date):
+            continue
         if require_ok and row.get("status") != "ok":
             continue
         state = _load_state(row.get("state_path"), result_dir)
@@ -173,6 +177,8 @@ def classify_outcome(
 def write_experience_artifacts(
     experiences: list[TradingExperience],
     output_dir: Path,
+    *,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     records = [asdict(item) for item in experiences]
@@ -211,6 +217,7 @@ def write_experience_artifacts(
         "experience_count": len(experiences),
         "label_counts": dict(sorted(label_counts.items())),
         "ticker_counts": dict(sorted(ticker_counts.items())),
+        "metadata": metadata or {},
         "files": {
             "jsonl": str(jsonl_path),
             "summary_csv": str(csv_path),
@@ -263,6 +270,21 @@ def _truncate(text: str, max_chars: int) -> str:
 
 def _clean_memory_text(text: str) -> str:
     return text.split("<!-- ENTRY_END -->", 1)[0].strip()
+
+
+def _date_in_range(
+    value: str | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> bool:
+    if not start_date and not end_date:
+        return True
+    date_text = (value or "").strip()
+    if not date_text:
+        return False
+    if start_date and date_text < start_date:
+        return False
+    return not (end_date and date_text > end_date)
 
 
 def _none_if_blank(value: str | None) -> str | None:

@@ -147,3 +147,47 @@ def test_write_experience_artifacts(tmp_path):
     assert (tmp_path / "out" / "experience_manifest.json").exists()
     manifest_file = json.loads((tmp_path / "out" / "experience_manifest.json").read_text(encoding="utf-8"))
     assert manifest_file["files"]["manifest"].endswith("experience_manifest.json")
+
+
+@pytest.mark.unit
+def test_build_experiences_filters_analysis_dates(tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    rows = []
+    for date in ["2026-04-01", "2026-05-01", "2026-06-01"]:
+        rows.append(
+            {
+                "ticker": "600519.SS",
+                "analysis_date": date,
+                "next_date": date,
+                "analysts": "market",
+                "llm_provider": "deepseek",
+                "quick_model": "quick",
+                "deep_model": "deep",
+                "rating": "Hold",
+                "trader_action": "Hold",
+                "execution_action": "Hold",
+                "decision_source": "pm-rating",
+                "position_before": "0.0",
+                "position_after": "0.0",
+                "stock_return_next": "0.0",
+                "strategy_return_next": "0.0",
+                "benchmark": "000001.SS",
+                "benchmark_return_next": "0.0",
+                "state_path": str(state_path),
+                "report_path": "",
+                "status": "ok",
+            }
+        )
+    with (tmp_path / "continuous_decisions.csv").open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    experiences = build_experiences(
+        tmp_path,
+        start_date="2026-05-01",
+        end_date="2026-05-31",
+    )
+
+    assert [item.analysis_date for item in experiences] == ["2026-05-01"]
