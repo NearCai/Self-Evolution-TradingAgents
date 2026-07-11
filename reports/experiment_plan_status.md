@@ -23,6 +23,7 @@ Last updated: 2026-07-11
 | `[x]` | First skill injection, caution-heavy | `results/continuous_ashare_2026_04_2w_deepseek_skill_main3_mf_pm` | 3 stocks, 2026-04-01 to 2026-04-14, `market,fundamentals`, DeepSeek flash, candidate skill injection | 27/27 ok; portfolio CR `-0.25%`; Buy&Hold `+0.54%`; benchmark `+3.25%` | Negative result. Skill injection made decisions too conservative and increased cash drag. Keep as ablation evidence. |
 | `[x]` | Opportunity skill injection | `results/continuous_ashare_2026_04_2w_deepseek_skill_opportunity_main3_mf_pm` | 3 stocks, 2026-04-01 to 2026-04-14, `market,fundamentals`, DeepSeek flash, opportunity-aware candidate skill injection | 27/27 ok; portfolio CR `+1.65%`; Buy&Hold `+0.55%`; benchmark `+3.25%`; ZMR `+1.67%` | Positive mechanism result. Beats same-window baseline and most rule methods, but still below benchmark and slightly below ZMR. |
 | `[x]` | Skill verification gate for opportunity run | `results/continuous_ashare_2026_04_2w_deepseek_skill_opportunity_main3_mf_pm/skill_verification` | Verifier compares evolved run with matched baseline window | PASSED; baseline CR `+0.36%`; evolved CR `+1.65%`; return delta `+1.28%`; all gates passed | First Hermes-style gate: completed runs, matched window, skill presence, return, drawdown, cash-drag, turnover. |
+| `[x]` | Accepted-skill engineering validation on May window | `results/continuous_ashare_2026_05_2w_deepseek_accepted_skill_main3_mf_pm` | 3 stocks, 2026-05-06 to 2026-05-14, `market,fundamentals`, DeepSeek flash, accepted skills from April two-week verifier | 21/21 ok; portfolio CR `0.00%`; Buy&Hold `-0.46%`; benchmark `-0.18%`; SMA `+0.88%`; default verifier PASSED but strict `--min-return-delta 0.001` FAILED | Engineering validation is inconclusive/weak. The strategy stayed fully in cash: avg position `0.00`, avg turnover `0.00`, no executed Buy. It avoided losses but did not prove active self-evolution. |
 
 ## Report Artifacts
 
@@ -42,8 +43,11 @@ The current verified evidence supports the following claims:
 3. Naive skill injection can hurt performance by making the agent too
    conservative.
 4. Opportunity-aware skills reduce the worst effect of the conservative skill
-   library and improve same-window performance.
-5. A verifier/gate is now available, but the currently accepted skills were
+   library and improve same-window performance on the first two-week window.
+5. The accepted-skill May engineering validation did not produce active trading:
+   the agent remained in cash and achieved `0.00%` return. This is not a useful
+   improvement even though it did not underperform the matched baseline.
+6. A verifier/gate is now available, but the currently accepted skills were
    generated from the full baseline window. For final research claims, a
    no-lookahead walk-forward split is still needed.
 
@@ -51,7 +55,8 @@ The current verified evidence supports the following claims:
 
 | Status | Experiment | Purpose | Planned output directory | Blocking dependency |
 |---|---|---|---|---|
-| `[ ]` | Accepted-skill engineering validation on a later window | Check whether verifier-accepted skills remain useful outside the first two-week window. | `results/continuous_ashare_2026_05_2w_deepseek_accepted_skill_main3_mf_pm` | Can run now with existing code. Treat as engineering validation, not strict final evidence. |
+| `[x]` | Accepted-skill engineering validation on a later window | Check whether verifier-accepted skills remain useful outside the first two-week window. | `results/continuous_ashare_2026_05_2w_deepseek_accepted_skill_main3_mf_pm` | Completed. Result was weak/inconclusive because the strategy stayed in cash. |
+| `[ ]` | Strengthen verifier gates | Avoid accepting zero-activity runs as meaningful improvements. Add or use stricter gates: minimum return delta, position-utilization floor, cash-drag no-worsening, and active decision hit-rate. | Code/config update, then `skill_verification_strict` style outputs | Needed before treating skill acceptance as research-grade. |
 | `[ ]` | No-lookahead April-only skill generation | Generate skills using only an earlier training window. | `results/walkforward_2026_q2/train_2026_04_skills` or equivalent | Need either a date-filter option for experience building or a filtered April-only baseline result folder. |
 | `[ ]` | Walk-forward validation window | Use April-generated skills on May and select only skills that pass verifier. | `results/walkforward_2026_q2/val_2026_05_skill_selected` | Requires no-lookahead April skills. |
 | `[ ]` | Walk-forward final test window | Evaluate verifier-selected skills on June without modifying them. | `results/walkforward_2026_q2/test_2026_06_skill_selected` | Requires validation-selected accepted skills. |
@@ -123,15 +128,14 @@ python scripts\verify_trading_skills.py `
   --skills-jsonl E:\TradingAgents\Self-Evolution-TradingAgents\results\continuous_ashare_2026_04_to_06_deepseek_flash_main3_mf_pm\evolution\skills\candidate_skills.jsonl
 ```
 
-### 4. Next Run: Accepted-Skill Engineering Validation
+### 4. Completed: Accepted-Skill Engineering Validation
 
-This is the next command that can be run immediately with the current code. It
-uses the verifier-accepted skill file and evaluates a later two-week window.
-Because the current skill source was generated from the full 2026-04 to 2026-06
-baseline, this run is an engineering validation. It should not be used as the
-final no-lookahead result.
+This run used the verifier-accepted skill file and evaluated a later two-week
+window. Because the current skill source was generated from the full 2026-04 to
+2026-06 baseline, this run is an engineering validation, not a final
+no-lookahead result.
 
-Smoke test first:
+Smoke command:
 
 ```powershell
 python scripts\run_continuous_backtest_ashare.py `
@@ -188,7 +192,42 @@ python scripts\verify_trading_skills.py `
   --skills-jsonl E:\TradingAgents\Self-Evolution-TradingAgents\results\continuous_ashare_2026_04_2w_deepseek_skill_opportunity_main3_mf_pm\skill_verification\accepted_skills.jsonl
 ```
 
-### 5. Strict Walk-Forward Plan
+Strict verifier check:
+
+```powershell
+python scripts\verify_trading_skills.py `
+  --baseline-dir E:\TradingAgents\Self-Evolution-TradingAgents\results\continuous_ashare_2026_04_to_06_deepseek_flash_main3_mf_pm `
+  --evolved-dir E:\TradingAgents\Self-Evolution-TradingAgents\results\continuous_ashare_2026_05_2w_deepseek_accepted_skill_main3_mf_pm `
+  --skills-jsonl E:\TradingAgents\Self-Evolution-TradingAgents\results\continuous_ashare_2026_04_2w_deepseek_skill_opportunity_main3_mf_pm\skill_verification\accepted_skills.jsonl `
+  --output-dir E:\TradingAgents\Self-Evolution-TradingAgents\results\continuous_ashare_2026_05_2w_deepseek_accepted_skill_main3_mf_pm\skill_verification_strict `
+  --min-return-delta 0.001
+```
+
+Observed outcome:
+
+- Default verifier: PASSED, because evolved CR `0.00%` was not worse than the
+  matched baseline CR `0.00%`.
+- Strict verifier: FAILED, because the return delta was `0.00%`, below the
+  `0.10%` improvement requirement.
+- Interpretation: not a meaningful improvement. The run stayed in cash.
+
+### 5. Next Immediate Code Task
+
+The May accepted-skill engineering validation shows that the current verifier is
+too permissive for research claims. The next code task should update the
+self-evolution harness before running more expensive experiments:
+
+```text
+1. Add date filters to build_trading_experiences.py so skills can be generated
+   from 2026-04 only.
+2. Strengthen verify_trading_skills.py defaults or add a --research-gate preset:
+   minimum return delta, no increase in cash-drag, and a minimum active exposure
+   or skill-hit signal.
+3. Re-run a no-lookahead walk-forward:
+   April train -> May validation -> June final test.
+```
+
+### 6. Strict Walk-Forward Plan
 
 The final report should use this stricter design:
 
@@ -201,4 +240,3 @@ The final report should use this stricter design:
 Current blocker: the experience builder needs date filtering, or we need a
 separate April-only baseline result folder. This should be the next code task
 before claiming final no-lookahead self-evolution results.
-
