@@ -447,6 +447,43 @@ def _china_ohlcv_cache_path(symbol: str) -> Path:
     return _china_ohlcv_cache_dir() / f"{_china_ohlcv_cache_key(symbol)}.csv"
 
 
+def _china_text_cache_dir(category: str) -> Path:
+    path = Path(get_config()["data_cache_dir"]) / category
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _china_text_cache_key(*parts: str) -> str:
+    raw = "__".join(str(part or "").upper() for part in parts)
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")
+
+
+def _china_text_cache_path(category: str, *parts: str) -> Path:
+    return _china_text_cache_dir(category) / f"{_china_text_cache_key(*parts)}.md"
+
+
+def _read_text_cache(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    except Exception as exc:  # noqa: BLE001 - corrupt cache should not break live fetch
+        logger.debug("Failed to read China text cache %s: %s", path, exc)
+        return None
+    return text if text.strip() else None
+
+
+def _write_text_cache(path: Path, text: str) -> None:
+    normalized = text.replace("\r\n", "\n")
+    if not normalized.strip():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(normalized, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - cache write is an optimization
+        logger.debug("Failed to write China text cache %s: %s", path, exc)
+
+
 def _normalize_cached_ohlcv(raw: pd.DataFrame, symbol: str) -> pd.DataFrame | None:
     if raw is None or raw.empty or "Date" not in raw.columns or "Close" not in raw.columns:
         return None
@@ -1025,6 +1062,18 @@ def _statement_report(
     curr_date: str | None = None,
 ) -> str:
     symbol = _require_a_share(ticker)
+    as_of = _ymd(_date(curr_date))
+    cache_path = _china_text_cache_path(
+        "china_statements",
+        symbol.display,
+        label,
+        freq,
+        as_of,
+    )
+    cached = _read_text_cache(cache_path)
+    if cached is not None:
+        return cached
+
     errors = []
     try:
         df = _fetch_akshare_statement(symbol, statement_symbol, curr_date, freq=freq)
@@ -1045,7 +1094,9 @@ def _statement_report(
     )
     if errors:
         header += f"# Fallback notes: {'; '.join(errors)}\n\n"
-    return header + df.to_csv(index=False)
+    report = (header + df.to_csv(index=False)).replace("\r\n", "\n")
+    _write_text_cache(cache_path, report)
+    return report
 
 
 def get_china_balance_sheet(
@@ -1084,6 +1135,10 @@ def get_china_fundamentals(
 ) -> str:
     symbol = _require_a_share(ticker)
     as_of = _ymd(_date(curr_date))
+    cache_path = _china_text_cache_path("china_fundamentals", symbol.display, as_of)
+    cached = _read_text_cache(cache_path)
+    if cached is not None:
+        return cached
 
     sections: list[str] = [
         f"# China A-share Fundamentals for {symbol.display} (requested: {ticker})",
@@ -1157,7 +1212,9 @@ def get_china_fundamentals(
 
     if len(sections) <= 5:
         raise NoMarketDataError(ticker, symbol.display, "no China fundamentals fields returned")
-    return "\n".join(sections).strip()
+    report = "\n".join(sections).strip()
+    _write_text_cache(cache_path, report)
+    return report
 
 
 def _filter_news_window(df: pd.DataFrame, date_col: str, start_date: str, end_date: str) -> pd.DataFrame:

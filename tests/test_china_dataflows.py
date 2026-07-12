@@ -144,6 +144,62 @@ def test_china_ohlcv_cache_falls_back_to_partial_rows(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_china_fundamentals_text_cache_reuses_successful_report(monkeypatch, tmp_path):
+    set_config({"data_cache_dir": str(tmp_path)})
+    calls = {"basic": 0, "financial": 0}
+
+    def fake_basic(symbol):
+        calls["basic"] += 1
+        return {"Name": "Unit Co", "IPO Date": "2000-01-01"}
+
+    def fake_financial(symbol, kind, curr_date, freq="quarterly", limit=8):
+        calls["financial"] += 1
+        return pd.DataFrame(
+            [
+                {
+                    "pubDate": pd.Timestamp("2025-04-30"),
+                    "statDate": pd.Timestamp("2025-03-31"),
+                    "roeAvg": 12.3,
+                    "currentRatio": 1.5,
+                    "CFOToNP": 0.9,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(china, "_fetch_baostock_basic", fake_basic)
+    monkeypatch.setattr(china, "_fetch_akshare_static_info", lambda symbol: {})
+    monkeypatch.setattr(china, "_latest_baostock_valuation", lambda symbol, curr_date: {"PE TTM": "10"})
+    monkeypatch.setattr(china, "_fetch_tushare_daily_basic", lambda symbol, curr_date: {})
+    monkeypatch.setattr(china, "_fetch_baostock_financial_rows", fake_financial)
+
+    first = china.get_china_fundamentals("600519.SS", "2025-06-05")
+    second = china.get_china_fundamentals("600519.SS", "2025-06-05")
+
+    assert first == second
+    assert "Unit Co" in second
+    assert calls == {"basic": 1, "financial": 3}
+
+
+@pytest.mark.unit
+def test_china_statement_text_cache_reuses_successful_report(monkeypatch, tmp_path):
+    set_config({"data_cache_dir": str(tmp_path)})
+    calls = {"statement": 0}
+
+    def fake_statement(symbol, statement_symbol, curr_date, freq="quarterly", limit=8):
+        calls["statement"] += 1
+        return pd.DataFrame([{"announcement": "2025-04-30", "value": 1.0}])
+
+    monkeypatch.setattr(china, "_fetch_akshare_statement", fake_statement)
+
+    first = china.get_china_balance_sheet("600519.SS", "quarterly", "2025-06-05")
+    second = china.get_china_balance_sheet("600519.SS", "quarterly", "2025-06-05")
+
+    assert first == second
+    assert "Balance Sheet" in second
+    assert calls["statement"] == 1
+
+
+@pytest.mark.unit
 def test_china_stock_data_rejects_non_a_share():
     with pytest.raises(NoMarketDataError):
         china.get_china_stock_data("AAPL", "2025-06-03", "2025-06-05")
