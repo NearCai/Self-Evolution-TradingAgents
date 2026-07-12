@@ -166,7 +166,7 @@ def test_select_and_render_candidate_skill_context(tmp_path):
 
 
 @pytest.mark.unit
-def test_select_candidate_skills_keeps_opportunity_when_unfiltered():
+def test_select_candidate_skills_filters_weak_benchmark_opportunity():
     skills = [
         {
             "skill_id": "caution-rating-hold",
@@ -182,15 +182,48 @@ def test_select_candidate_skills_keeps_opportunity_when_unfiltered():
             "source_dimension": "cash_drag",
             "source_value": "positive_benchmark_interval",
             "evidence_count": 20,
+            "success_rate": 0.0,
+            "failure_rate": 1.0,
             "avg_strategy_vs_benchmark": -0.01,
             "avg_strategy_vs_buy_hold": -0.02,
+            "avg_stock_return_next": 0.001,
         },
     ]
 
     selected = select_candidate_skills(skills, max_skills=2)
 
-    assert selected[0]["skill_type"] == "opportunity"
-    assert selected[1]["skill_type"] == "caution"
+    assert [skill["skill_id"] for skill in selected] == ["caution-rating-hold"]
+
+
+@pytest.mark.unit
+def test_select_candidate_skills_keeps_actionable_stock_opportunity():
+    skills = [
+        {
+            "skill_id": "caution-rating-hold",
+            "skill_type": "caution",
+            "source_dimension": "rating",
+            "source_value": "Hold",
+            "evidence_count": 100,
+            "avg_strategy_vs_benchmark": -0.03,
+        },
+        {
+            "skill_id": "opportunity-cash-drag-positive-stock-interval",
+            "skill_type": "opportunity",
+            "source_dimension": "cash_drag",
+            "source_value": "positive_stock_interval",
+            "evidence_count": 12,
+            "success_rate": 0.42,
+            "failure_rate": 0.58,
+            "avg_strategy_vs_benchmark": -0.004,
+            "avg_strategy_vs_buy_hold": -0.012,
+            "avg_stock_return_next": 0.012,
+        },
+    ]
+
+    selected = select_candidate_skills(skills, max_skills=2)
+
+    assert selected[0]["skill_id"] == "opportunity-cash-drag-positive-stock-interval"
+    assert selected[1]["skill_id"] == "caution-rating-hold"
 
 
 @pytest.mark.unit

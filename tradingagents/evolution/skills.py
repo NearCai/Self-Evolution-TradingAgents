@@ -13,6 +13,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+MIN_ACTIONABLE_OPPORTUNITY_STOCK_RETURN = 0.005
+MAX_OPPORTUNITY_FAILURE_RATE = 0.80
+
 
 @dataclass
 class CandidateTradingSkill:
@@ -138,6 +141,7 @@ def select_candidate_skills(
             for skill in skills
             if _clean_value(skill.get("skill_type")).lower() in allowed_types
         ]
+    skills = [skill for skill in skills if _passes_selection_quality_filter(skill)]
 
     requested = {
         ("rating", _clean_value(rating)),
@@ -306,6 +310,33 @@ def _select_diverse_skills(
         if len(selected) >= max_skills:
             break
     return selected
+
+
+def _passes_selection_quality_filter(skill: dict[str, Any]) -> bool:
+    """Reject skills that are too broad or weak to inject into live decisions."""
+    skill_type = _clean_value(skill.get("skill_type")).lower()
+    if skill_type != "opportunity":
+        return True
+
+    success_rate = _to_float(skill.get("success_rate"))
+    failure_rate = _to_float(skill.get("failure_rate"))
+    if (
+        success_rate is not None
+        and failure_rate is not None
+        and success_rate <= 0.0
+        and failure_rate >= MAX_OPPORTUNITY_FAILURE_RATE
+    ):
+        return False
+
+    if _clean_value(skill.get("source_dimension")) == "cash_drag":
+        avg_stock_return = _to_float(skill.get("avg_stock_return_next"))
+        if (
+            avg_stock_return is not None
+            and avg_stock_return < MIN_ACTIONABLE_OPPORTUNITY_STOCK_RETURN
+        ):
+            return False
+
+    return True
 
 
 def _summarize_group(group: list[dict[str, Any]]) -> dict[str, Any]:
