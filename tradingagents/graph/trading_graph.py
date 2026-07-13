@@ -518,6 +518,7 @@ class TradingAgentsGraph:
         selected = select_candidate_skills(
             self._evolution_skill_records,
             allowed_skill_types=self.config.get("evolution_skill_allowed_types"),
+            opportunity_evidence=self.config.get("evolution_opportunity_evidence"),
             max_skills=int(self.config.get("evolution_skill_max_skills", 3)),
         )
         return render_skill_context(

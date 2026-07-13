@@ -103,12 +103,77 @@ def test_build_backtest_config_can_enable_evolution_skills(tmp_path):
         evolution_skill_max_skills=2,
         evolution_skill_max_chars=900,
         evolution_skill_allowed_types=["opportunity", "promote"],
+        evolution_opportunity_gate_enabled=True,
     )
 
     assert cfg["evolution_skills_path"] == str(skills_path)
     assert cfg["evolution_skill_max_skills"] == 2
     assert cfg["evolution_skill_max_chars"] == 900
     assert cfg["evolution_skill_allowed_types"] == ["opportunity", "promote"]
+    assert cfg["evolution_opportunity_gate_enabled"] is True
+
+
+@pytest.mark.unit
+def test_build_opportunity_evidence_requires_positive_signals():
+    stock_prices = {
+        "2026-06-01": 10.0,
+        "2026-06-02": 9.8,
+        "2026-06-03": 9.6,
+        "2026-06-04": 9.5,
+        "2026-06-05": 9.4,
+    }
+    benchmark_prices = {
+        "2026-06-01": 100.0,
+        "2026-06-02": 101.0,
+        "2026-06-03": 102.0,
+        "2026-06-04": 103.0,
+        "2026-06-05": 104.0,
+    }
+
+    evidence = continuous.build_opportunity_evidence(
+        stock_prices,
+        benchmark_prices,
+        "2026-06-05",
+        enabled=True,
+        lookback_days=4,
+        min_positive_signals=2,
+    )
+
+    assert evidence["allow_opportunity"] is False
+    assert evidence["positive_signal_count"] < 2
+    assert evidence["reason"] == "insufficient_positive_evidence"
+
+
+@pytest.mark.unit
+def test_build_opportunity_evidence_allows_constructive_setup():
+    stock_prices = {
+        "2026-06-01": 10.0,
+        "2026-06-02": 10.2,
+        "2026-06-03": 10.4,
+        "2026-06-04": 10.5,
+        "2026-06-05": 10.7,
+    }
+    benchmark_prices = {
+        "2026-06-01": 100.0,
+        "2026-06-02": 100.1,
+        "2026-06-03": 100.2,
+        "2026-06-04": 100.1,
+        "2026-06-05": 100.0,
+    }
+
+    evidence = continuous.build_opportunity_evidence(
+        stock_prices,
+        benchmark_prices,
+        "2026-06-05",
+        enabled=True,
+        lookback_days=4,
+        min_positive_signals=2,
+    )
+
+    assert evidence["allow_opportunity"] is True
+    assert evidence["positive_signal_count"] >= 2
+    assert evidence["stock_return_lookback"] > 0
+    assert evidence["relative_return_lookback"] > 0
 
 
 @pytest.mark.unit
@@ -180,11 +245,13 @@ def test_run_agent_decision_passes_current_position(monkeypatch, tmp_path):
         },
         debug=False,
         current_position=1.0,
+        opportunity_evidence={"enabled": True, "allow_opportunity": False},
     )
 
     assert row.status == "ok"
     assert state is not None
     assert captured["config"]["current_position"] == 1.0
+    assert captured["config"]["evolution_opportunity_evidence"]["allow_opportunity"] is False
 
 
 @pytest.mark.unit

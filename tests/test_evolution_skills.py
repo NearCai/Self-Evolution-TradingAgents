@@ -227,6 +227,84 @@ def test_select_candidate_skills_keeps_actionable_stock_opportunity():
 
 
 @pytest.mark.unit
+def test_select_candidate_skills_runtime_gate_blocks_opportunity_without_positive_evidence():
+    skills = [
+        {
+            "skill_id": "caution-rating-hold",
+            "skill_type": "caution",
+            "source_dimension": "rating",
+            "source_value": "Hold",
+            "evidence_count": 100,
+            "avg_strategy_vs_benchmark": -0.03,
+        },
+        {
+            "skill_id": "opportunity-cash-drag-positive-stock-interval",
+            "skill_type": "opportunity",
+            "source_dimension": "cash_drag",
+            "source_value": "positive_stock_interval",
+            "evidence_count": 12,
+            "success_rate": 0.42,
+            "failure_rate": 0.58,
+            "avg_strategy_vs_benchmark": -0.004,
+            "avg_strategy_vs_buy_hold": -0.012,
+            "avg_stock_return_next": 0.012,
+        },
+    ]
+
+    selected = select_candidate_skills(
+        skills,
+        opportunity_evidence={
+            "enabled": True,
+            "allow_opportunity": False,
+            "positive_signal_count": 1,
+            "min_positive_signals": 2,
+        },
+        max_skills=2,
+    )
+
+    assert [skill["skill_id"] for skill in selected] == ["caution-rating-hold"]
+
+
+@pytest.mark.unit
+def test_select_candidate_skills_runtime_gate_keeps_opportunity_with_positive_evidence():
+    skills = [
+        {
+            "skill_id": "caution-rating-hold",
+            "skill_type": "caution",
+            "source_dimension": "rating",
+            "source_value": "Hold",
+            "evidence_count": 100,
+            "avg_strategy_vs_benchmark": -0.03,
+        },
+        {
+            "skill_id": "opportunity-cash-drag-positive-stock-interval",
+            "skill_type": "opportunity",
+            "source_dimension": "cash_drag",
+            "source_value": "positive_stock_interval",
+            "evidence_count": 12,
+            "success_rate": 0.42,
+            "failure_rate": 0.58,
+            "avg_strategy_vs_benchmark": -0.004,
+            "avg_strategy_vs_buy_hold": -0.012,
+            "avg_stock_return_next": 0.012,
+        },
+    ]
+
+    selected = select_candidate_skills(
+        skills,
+        opportunity_evidence={
+            "enabled": True,
+            "allow_opportunity": True,
+            "positive_signal_count": 2,
+            "min_positive_signals": 2,
+        },
+        max_skills=2,
+    )
+
+    assert selected[0]["skill_id"] == "opportunity-cash-drag-positive-stock-interval"
+
+
+@pytest.mark.unit
 def test_select_candidate_skills_filters_allowed_skill_types():
     skills = [
         {

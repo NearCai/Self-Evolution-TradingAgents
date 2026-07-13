@@ -132,6 +132,7 @@ def select_candidate_skills(
     rating: str | None = None,
     execution_action: str | None = None,
     allowed_skill_types: list[str] | tuple[str, ...] | set[str] | None = None,
+    opportunity_evidence: dict[str, Any] | None = None,
     max_skills: int = 3,
 ) -> list[dict[str, Any]]:
     allowed_types = {_clean_value(item).lower() for item in (allowed_skill_types or [])}
@@ -141,7 +142,12 @@ def select_candidate_skills(
             for skill in skills
             if _clean_value(skill.get("skill_type")).lower() in allowed_types
         ]
-    skills = [skill for skill in skills if _passes_selection_quality_filter(skill)]
+    skills = [
+        skill
+        for skill in skills
+        if _passes_selection_quality_filter(skill)
+        and _passes_runtime_opportunity_gate(skill, opportunity_evidence)
+    ]
 
     requested = {
         ("rating", _clean_value(rating)),
@@ -176,7 +182,7 @@ def render_skill_context(
     lines = [
         "Candidate trading skills from past backtest experience:",
         "Use these as soft evidence. Do not follow a skill blindly if current reports conflict.",
-        "Opportunity skills should explicitly challenge cash-like Hold/Sell decisions when upside evidence is not refuted.",
+        "Opportunity skills should explicitly challenge cash-like Hold/Sell decisions only when current stock-specific evidence supports participation.",
         "",
     ]
     for skill in skills:
@@ -339,6 +345,25 @@ def _passes_selection_quality_filter(skill: dict[str, Any]) -> bool:
     return True
 
 
+def _passes_runtime_opportunity_gate(
+    skill: dict[str, Any],
+    opportunity_evidence: dict[str, Any] | None,
+) -> bool:
+    """Require live positive evidence before injecting opportunity skills."""
+    skill_type = _clean_value(skill.get("skill_type")).lower()
+    if skill_type != "opportunity" or not opportunity_evidence:
+        return True
+    if not bool(opportunity_evidence.get("enabled")):
+        return True
+
+    if not bool(opportunity_evidence.get("allow_opportunity")):
+        return False
+
+    min_signals = int(opportunity_evidence.get("min_positive_signals") or 1)
+    positive_signals = int(opportunity_evidence.get("positive_signal_count") or 0)
+    return positive_signals >= min_signals
+
+
 def _summarize_group(group: list[dict[str, Any]]) -> dict[str, Any]:
     labels = Counter(_clean_value(item.get("outcome_label")) for item in group)
     evidence_count = len(group)
@@ -462,6 +487,8 @@ def _cash_drag_procedure(value: str) -> list[str]:
     return [
         f"Check whether the analyst reports contain concrete evidence against the {reference}.",
         "If the position is 0.00, interpret Hold as an active cash decision rather than a neutral action.",
+        "Before increasing exposure, require stock-specific confirmation such as recent positive stock momentum, relative strength versus the benchmark, or price holding above short moving averages.",
+        "Do not use this skill to justify participation when the stock is in a clear relative downtrend or the current reports name concrete downside catalysts.",
         "When downside evidence is weak and upside/benchmark momentum is constructive, explicitly evaluate a starter long or Overweight before choosing cash.",
         "Only remain in cash when the final decision names a concrete downside catalyst that outweighs missed-upside risk.",
     ]

@@ -212,6 +212,81 @@ def trading_dates(calendar_ticker: str, start_date: str, end_date: str) -> list[
     return [idx.date().isoformat() for idx in data.index]
 
 
+def backfill_start_date(start_date: str, calendar_days: int) -> str:
+    return (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=calendar_days)).strftime("%Y-%m-%d")
+
+
+def build_opportunity_evidence(
+    stock_prices: dict[str, float],
+    benchmark_prices: dict[str, float],
+    date: str,
+    *,
+    enabled: bool,
+    lookback_days: int,
+    min_positive_signals: int,
+) -> dict:
+    evidence = {
+        "enabled": enabled,
+        "allow_opportunity": True,
+        "min_positive_signals": min_positive_signals,
+        "positive_signal_count": 0,
+        "reason": "gate_disabled",
+    }
+    if not enabled:
+        return evidence
+
+    stock_dates = sorted(day for day in stock_prices if day <= date)
+    benchmark_dates = sorted(day for day in benchmark_prices if day <= date)
+    if len(stock_dates) < 2 or len(benchmark_dates) < 2:
+        evidence.update({"allow_opportunity": False, "reason": "insufficient_price_history"})
+        return evidence
+
+    stock_current_date = stock_dates[-1]
+    benchmark_current_date = benchmark_dates[-1]
+    stock_lookback_date = stock_dates[max(0, len(stock_dates) - 1 - lookback_days)]
+    benchmark_lookback_date = benchmark_dates[max(0, len(benchmark_dates) - 1 - lookback_days)]
+
+    stock_current = stock_prices[stock_current_date]
+    stock_lookback = stock_prices[stock_lookback_date]
+    benchmark_current = benchmark_prices[benchmark_current_date]
+    benchmark_lookback = benchmark_prices[benchmark_lookback_date]
+
+    stock_return = stock_current / stock_lookback - 1.0 if stock_lookback else 0.0
+    benchmark_return = benchmark_current / benchmark_lookback - 1.0 if benchmark_lookback else 0.0
+    relative_return = stock_return - benchmark_return
+    recent_stock_closes = [stock_prices[day] for day in stock_dates[-5:]]
+    medium_stock_closes = [stock_prices[day] for day in stock_dates[-10:]]
+    sma5 = mean(recent_stock_closes) if recent_stock_closes else stock_current
+    sma10 = mean(medium_stock_closes) if medium_stock_closes else stock_current
+
+    positive_signals = {
+        "stock_return_positive": stock_return > 0.0,
+        "relative_return_positive": relative_return > 0.0,
+        "above_sma5": stock_current >= sma5,
+        "above_sma10": stock_current >= sma10,
+    }
+    positive_signal_count = sum(1 for value in positive_signals.values() if value)
+    allow_opportunity = positive_signal_count >= min_positive_signals
+    reason = "positive_evidence_met" if allow_opportunity else "insufficient_positive_evidence"
+
+    evidence.update(
+        {
+            "allow_opportunity": allow_opportunity,
+            "positive_signal_count": positive_signal_count,
+            "reason": reason,
+            "stock_return_lookback": stock_return,
+            "benchmark_return_lookback": benchmark_return,
+            "relative_return_lookback": relative_return,
+            "close_vs_sma5": stock_current / sma5 - 1.0 if sma5 else 0.0,
+            "close_vs_sma10": stock_current / sma10 - 1.0 if sma10 else 0.0,
+            "signals": positive_signals,
+            "stock_lookback_date": stock_lookback_date,
+            "benchmark_lookback_date": benchmark_lookback_date,
+        }
+    )
+    return evidence
+
+
 def extract_trader_action(final_state: dict, rating: str) -> str:
     trader_text = final_state.get("trader_investment_plan") or ""
     final_text = final_state.get("final_trade_decision") or ""
@@ -313,6 +388,7 @@ def build_backtest_config(
     evolution_skill_max_skills: int = 3,
     evolution_skill_max_chars: int = 1800,
     evolution_skill_allowed_types: list[str] | None = None,
+    evolution_opportunity_gate_enabled: bool = False,
 ) -> dict:
     base_config = copy.deepcopy(DEFAULT_CONFIG)
     base_config["results_dir"] = str(output_dir / "_graph_logs")
@@ -325,6 +401,7 @@ def build_backtest_config(
     base_config["evolution_skill_max_skills"] = evolution_skill_max_skills
     base_config["evolution_skill_max_chars"] = evolution_skill_max_chars
     base_config["evolution_skill_allowed_types"] = evolution_skill_allowed_types
+    base_config["evolution_opportunity_gate_enabled"] = evolution_opportunity_gate_enabled
     if llm_provider:
         base_config["llm_provider"] = llm_provider
     if quick_model:
@@ -353,6 +430,7 @@ def run_agent_decision(
     debug: bool,
     decision_source: str = "pm-rating",
     current_position: float | None = None,
+    opportunity_evidence: dict | None = None,
 ) -> tuple[DecisionRow, dict | None]:
     started = datetime.now()
     ticker = item["ticker"]
@@ -380,6 +458,8 @@ def run_agent_decision(
         run_config = copy.deepcopy(config)
         if current_position is not None:
             run_config["current_position"] = current_position
+        if opportunity_evidence is not None:
+            run_config["evolution_opportunity_evidence"] = opportunity_evidence
         graph = TradingAgentsGraph(selected_analysts=tuple(analysts), debug=debug, config=run_config)
         final_state, decision = graph.propagate(ticker, date, asset_type="stock")
         rating = parse_rating(final_state.get("final_trade_decision", ""), default=decision or "Hold")
@@ -625,6 +705,12 @@ def main() -> int:
                         help="Maximum characters for injected candidate skill context.")
     parser.add_argument("--evolution-skill-types", default=None,
                         help="Optional comma-separated skill types to inject, e.g. opportunity,promote.")
+    parser.add_argument("--evolution-opportunity-gate", action="store_true",
+                        help="Inject opportunity skills only when current price action has positive stock-specific evidence.")
+    parser.add_argument("--evolution-opportunity-lookback-days", type=int, default=5,
+                        help="Trading-day lookback used by --evolution-opportunity-gate.")
+    parser.add_argument("--evolution-opportunity-min-positive-signals", type=int, default=2,
+                        help="Minimum positive price-action signals required by --evolution-opportunity-gate.")
     parser.add_argument("--max-runs", type=int, default=None,
                         help="Stop after this many new agent calls; useful for smoke/resume validation.")
     parser.add_argument("--force", action="store_true", help="Re-run completed ticker/date rows.")
@@ -669,9 +755,16 @@ def main() -> int:
         evolution_skill_allowed_types=parse_csv_arg(args.evolution_skill_types, [])
         if args.evolution_skill_types
         else None,
+        evolution_opportunity_gate_enabled=args.evolution_opportunity_gate,
     )
     base_config["execution_policy"] = "long/short" if args.allow_short else "long/cash"
 
+    price_backfill_days = max(30, args.evolution_opportunity_lookback_days * 4)
+    price_start = (
+        backfill_start_date(args.start_date, price_backfill_days)
+        if args.evolution_opportunity_gate
+        else args.start_date
+    )
     price_end = (datetime.strptime(args.end_date, "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
     prices: dict[str, dict[str, float]] = {}
     price_sources: dict[str, str] = {}
@@ -682,11 +775,11 @@ def main() -> int:
         ticker = item["ticker"]
         benchmark = resolve_benchmark(ticker, base_config)
         benchmarks[ticker] = benchmark
-        ticker_history = history_with_retry(ticker, args.start_date, price_end)
+        ticker_history = history_with_retry(ticker, price_start, price_end)
         prices[ticker] = normalize_history_index(ticker_history)
         price_sources[ticker] = history_source(ticker_history)
         if benchmark not in benchmark_prices:
-            benchmark_history = history_with_retry(benchmark, args.start_date, price_end)
+            benchmark_history = history_with_retry(benchmark, price_start, price_end)
             benchmark_prices[benchmark] = normalize_history_index(benchmark_history)
             benchmark_price_sources[benchmark] = history_source(benchmark_history)
 
@@ -712,6 +805,13 @@ def main() -> int:
         print("Evolution skill max skills:", base_config["evolution_skill_max_skills"])
         print("Evolution skill max chars:", base_config["evolution_skill_max_chars"])
         print("Evolution skill types:", base_config.get("evolution_skill_allowed_types") or "all")
+        print("Evolution opportunity gate:", args.evolution_opportunity_gate)
+        if args.evolution_opportunity_gate:
+            print("Evolution opportunity lookback days:", args.evolution_opportunity_lookback_days)
+            print(
+                "Evolution opportunity min positive signals:",
+                args.evolution_opportunity_min_positive_signals,
+            )
     print("Benchmark policy:", args.benchmark_ticker or "A-share board-aware")
     print("Decision source:", args.decision_source)
     print("Execution policy:", "long/short" if args.allow_short else "long/cash")
@@ -766,6 +866,15 @@ def main() -> int:
                 print(f"[skip] {ticker} {date} already completed")
                 continue
 
+            benchmark = benchmarks[ticker]
+            opportunity_evidence = build_opportunity_evidence(
+                prices[ticker],
+                benchmark_prices[benchmark],
+                date,
+                enabled=args.evolution_opportunity_gate,
+                lookback_days=args.evolution_opportunity_lookback_days,
+                min_positive_signals=args.evolution_opportunity_min_positive_signals,
+            )
             print(f"[run] {ticker} {date} -> {next_date} analysts={analyst_key}")
             row, _ = run_agent_decision(
                 item,
@@ -777,12 +886,12 @@ def main() -> int:
                 args.debug,
                 args.decision_source,
                 current_position=positions[ticker],
+                opportunity_evidence=opportunity_evidence,
             )
             new_runs += 1
 
             close = prices[ticker].get(date)
             next_close = prices[ticker].get(next_date)
-            benchmark = benchmarks[ticker]
             benchmark_close = benchmark_prices[benchmark].get(date)
             benchmark_next_close = benchmark_prices[benchmark].get(next_date)
 
