@@ -224,12 +224,21 @@ def build_opportunity_evidence(
     enabled: bool,
     lookback_days: int,
     min_positive_signals: int,
+    opportunity_gate_enabled: bool | None = None,
+    current_position: float = 0.0,
+    position_risk_enabled: bool = False,
+    position_risk_floor: float = 0.5,
 ) -> dict:
     evidence = {
         "enabled": enabled,
+        "opportunity_gate_enabled": enabled if opportunity_gate_enabled is None else opportunity_gate_enabled,
         "allow_opportunity": True,
         "min_positive_signals": min_positive_signals,
         "positive_signal_count": 0,
+        "current_position": current_position,
+        "position_risk_enabled": position_risk_enabled,
+        "position_risk_floor": position_risk_floor,
+        "de_risk_required": False,
         "reason": "gate_disabled",
     }
     if not enabled:
@@ -268,11 +277,17 @@ def build_opportunity_evidence(
     positive_signal_count = sum(1 for value in positive_signals.values() if value)
     allow_opportunity = positive_signal_count >= min_positive_signals
     reason = "positive_evidence_met" if allow_opportunity else "insufficient_positive_evidence"
+    de_risk_required = (
+        position_risk_enabled
+        and current_position >= position_risk_floor
+        and not allow_opportunity
+    )
 
     evidence.update(
         {
             "allow_opportunity": allow_opportunity,
             "positive_signal_count": positive_signal_count,
+            "de_risk_required": de_risk_required,
             "reason": reason,
             "stock_return_lookback": stock_return,
             "benchmark_return_lookback": benchmark_return,
@@ -389,6 +404,7 @@ def build_backtest_config(
     evolution_skill_max_chars: int = 1800,
     evolution_skill_allowed_types: list[str] | None = None,
     evolution_opportunity_gate_enabled: bool = False,
+    evolution_position_risk_gate_enabled: bool = False,
 ) -> dict:
     base_config = copy.deepcopy(DEFAULT_CONFIG)
     base_config["results_dir"] = str(output_dir / "_graph_logs")
@@ -402,6 +418,7 @@ def build_backtest_config(
     base_config["evolution_skill_max_chars"] = evolution_skill_max_chars
     base_config["evolution_skill_allowed_types"] = evolution_skill_allowed_types
     base_config["evolution_opportunity_gate_enabled"] = evolution_opportunity_gate_enabled
+    base_config["evolution_position_risk_gate_enabled"] = evolution_position_risk_gate_enabled
     if llm_provider:
         base_config["llm_provider"] = llm_provider
     if quick_model:
@@ -711,6 +728,10 @@ def main() -> int:
                         help="Trading-day lookback used by --evolution-opportunity-gate.")
     parser.add_argument("--evolution-opportunity-min-positive-signals", type=int, default=2,
                         help="Minimum positive price-action signals required by --evolution-opportunity-gate.")
+    parser.add_argument("--evolution-position-risk-gate", action="store_true",
+                        help="When already long, inject de-risk guidance if positive stock-specific evidence disappears.")
+    parser.add_argument("--evolution-position-risk-floor", type=float, default=0.5,
+                        help="Minimum current position that activates --evolution-position-risk-gate.")
     parser.add_argument("--max-runs", type=int, default=None,
                         help="Stop after this many new agent calls; useful for smoke/resume validation.")
     parser.add_argument("--force", action="store_true", help="Re-run completed ticker/date rows.")
@@ -756,13 +777,15 @@ def main() -> int:
         if args.evolution_skill_types
         else None,
         evolution_opportunity_gate_enabled=args.evolution_opportunity_gate,
+        evolution_position_risk_gate_enabled=args.evolution_position_risk_gate,
     )
     base_config["execution_policy"] = "long/short" if args.allow_short else "long/cash"
 
     price_backfill_days = max(30, args.evolution_opportunity_lookback_days * 4)
+    evidence_gate_enabled = args.evolution_opportunity_gate or args.evolution_position_risk_gate
     price_start = (
         backfill_start_date(args.start_date, price_backfill_days)
-        if args.evolution_opportunity_gate
+        if evidence_gate_enabled
         else args.start_date
     )
     price_end = (datetime.strptime(args.end_date, "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
@@ -812,6 +835,9 @@ def main() -> int:
                 "Evolution opportunity min positive signals:",
                 args.evolution_opportunity_min_positive_signals,
             )
+        print("Evolution position risk gate:", args.evolution_position_risk_gate)
+        if args.evolution_position_risk_gate:
+            print("Evolution position risk floor:", args.evolution_position_risk_floor)
     print("Benchmark policy:", args.benchmark_ticker or "A-share board-aware")
     print("Decision source:", args.decision_source)
     print("Execution policy:", "long/short" if args.allow_short else "long/cash")
@@ -871,9 +897,13 @@ def main() -> int:
                 prices[ticker],
                 benchmark_prices[benchmark],
                 date,
-                enabled=args.evolution_opportunity_gate,
+                enabled=evidence_gate_enabled,
+                opportunity_gate_enabled=args.evolution_opportunity_gate,
                 lookback_days=args.evolution_opportunity_lookback_days,
                 min_positive_signals=args.evolution_opportunity_min_positive_signals,
+                current_position=positions[ticker],
+                position_risk_enabled=args.evolution_position_risk_gate,
+                position_risk_floor=args.evolution_position_risk_floor,
             )
             print(f"[run] {ticker} {date} -> {next_date} analysts={analyst_key}")
             row, _ = run_agent_decision(

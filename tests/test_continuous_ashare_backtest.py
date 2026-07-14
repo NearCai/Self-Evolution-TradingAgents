@@ -104,6 +104,7 @@ def test_build_backtest_config_can_enable_evolution_skills(tmp_path):
         evolution_skill_max_chars=900,
         evolution_skill_allowed_types=["opportunity", "promote"],
         evolution_opportunity_gate_enabled=True,
+        evolution_position_risk_gate_enabled=True,
     )
 
     assert cfg["evolution_skills_path"] == str(skills_path)
@@ -111,6 +112,7 @@ def test_build_backtest_config_can_enable_evolution_skills(tmp_path):
     assert cfg["evolution_skill_max_chars"] == 900
     assert cfg["evolution_skill_allowed_types"] == ["opportunity", "promote"]
     assert cfg["evolution_opportunity_gate_enabled"] is True
+    assert cfg["evolution_position_risk_gate_enabled"] is True
 
 
 @pytest.mark.unit
@@ -142,6 +144,40 @@ def test_build_opportunity_evidence_requires_positive_signals():
     assert evidence["allow_opportunity"] is False
     assert evidence["positive_signal_count"] < 2
     assert evidence["reason"] == "insufficient_positive_evidence"
+
+
+@pytest.mark.unit
+def test_build_opportunity_evidence_marks_de_risk_for_stale_long():
+    stock_prices = {
+        "2026-06-01": 10.0,
+        "2026-06-02": 9.8,
+        "2026-06-03": 9.6,
+        "2026-06-04": 9.5,
+        "2026-06-05": 9.4,
+    }
+    benchmark_prices = {
+        "2026-06-01": 100.0,
+        "2026-06-02": 101.0,
+        "2026-06-03": 102.0,
+        "2026-06-04": 103.0,
+        "2026-06-05": 104.0,
+    }
+
+    evidence = continuous.build_opportunity_evidence(
+        stock_prices,
+        benchmark_prices,
+        "2026-06-05",
+        enabled=True,
+        opportunity_gate_enabled=True,
+        lookback_days=4,
+        min_positive_signals=2,
+        current_position=1.0,
+        position_risk_enabled=True,
+        position_risk_floor=0.5,
+    )
+
+    assert evidence["allow_opportunity"] is False
+    assert evidence["de_risk_required"] is True
 
 
 @pytest.mark.unit

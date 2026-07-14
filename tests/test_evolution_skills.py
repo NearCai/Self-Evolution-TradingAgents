@@ -6,6 +6,7 @@ from tradingagents.evolution.skills import (
     generate_candidate_skills,
     load_candidate_skill_records,
     load_experience_records,
+    render_runtime_evolution_guidance,
     render_skill_context,
     select_candidate_skills,
     write_skill_artifacts,
@@ -255,6 +256,7 @@ def test_select_candidate_skills_runtime_gate_blocks_opportunity_without_positiv
         skills,
         opportunity_evidence={
             "enabled": True,
+            "opportunity_gate_enabled": True,
             "allow_opportunity": False,
             "positive_signal_count": 1,
             "min_positive_signals": 2,
@@ -294,6 +296,7 @@ def test_select_candidate_skills_runtime_gate_keeps_opportunity_with_positive_ev
         skills,
         opportunity_evidence={
             "enabled": True,
+            "opportunity_gate_enabled": True,
             "allow_opportunity": True,
             "positive_signal_count": 2,
             "min_positive_signals": 2,
@@ -302,6 +305,41 @@ def test_select_candidate_skills_runtime_gate_keeps_opportunity_with_positive_ev
     )
 
     assert selected[0]["skill_id"] == "opportunity-cash-drag-positive-stock-interval"
+
+
+@pytest.mark.unit
+def test_render_runtime_evolution_guidance_flags_stale_long_risk():
+    context = render_runtime_evolution_guidance(
+        {
+            "enabled": True,
+            "position_risk_enabled": True,
+            "de_risk_required": True,
+            "current_position": 1.0,
+            "positive_signal_count": 1,
+            "min_positive_signals": 2,
+            "stock_return_lookback": -0.02,
+            "relative_return_lookback": -0.03,
+            "close_vs_sma5": -0.01,
+            "close_vs_sma10": -0.015,
+        }
+    )
+
+    assert "Position-aware self-evolution risk control" in context
+    assert "Underweight/Sell" in context
+
+
+@pytest.mark.unit
+def test_render_runtime_evolution_guidance_omits_when_de_risk_not_required():
+    context = render_runtime_evolution_guidance(
+        {
+            "enabled": True,
+            "position_risk_enabled": True,
+            "de_risk_required": False,
+            "current_position": 1.0,
+        }
+    )
+
+    assert context == ""
 
 
 @pytest.mark.unit

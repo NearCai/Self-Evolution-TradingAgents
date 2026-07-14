@@ -32,6 +32,7 @@ from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.evolution.skills import (
     load_candidate_skill_records,
+    render_runtime_evolution_guidance,
     render_skill_context,
     select_candidate_skills,
 )
@@ -521,10 +522,15 @@ class TradingAgentsGraph:
             opportunity_evidence=self.config.get("evolution_opportunity_evidence"),
             max_skills=int(self.config.get("evolution_skill_max_skills", 3)),
         )
-        return render_skill_context(
+        skill_context = render_skill_context(
             selected,
             max_chars=int(self.config.get("evolution_skill_max_chars", 1800)),
         )
+        runtime_context = render_runtime_evolution_guidance(
+            self.config.get("evolution_opportunity_evidence"),
+            max_chars=int(self.config.get("evolution_runtime_guidance_max_chars", 700)),
+        )
+        return "\n\n".join(item for item in (skill_context, runtime_context) if item)
 
     def _get_position_context(self) -> str:
         if "current_position" not in self.config:

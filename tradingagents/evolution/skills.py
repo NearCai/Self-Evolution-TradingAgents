@@ -203,6 +203,54 @@ def render_skill_context(
     return _shorten(text, max_chars)
 
 
+def render_runtime_evolution_guidance(
+    opportunity_evidence: dict[str, Any] | None,
+    *,
+    max_chars: int = 700,
+) -> str:
+    """Render position-aware runtime guidance derived from current evidence."""
+    if not opportunity_evidence or not bool(opportunity_evidence.get("enabled")):
+        return ""
+
+    current_position = _to_float(opportunity_evidence.get("current_position")) or 0.0
+    if not bool(opportunity_evidence.get("position_risk_enabled")):
+        return ""
+    if not bool(opportunity_evidence.get("de_risk_required")):
+        return ""
+
+    positive_signals = int(opportunity_evidence.get("positive_signal_count") or 0)
+    min_signals = int(opportunity_evidence.get("min_positive_signals") or 1)
+    stock_return = _format_pct(opportunity_evidence.get("stock_return_lookback"))
+    relative_return = _format_pct(opportunity_evidence.get("relative_return_lookback"))
+    close_vs_sma5 = _format_pct(opportunity_evidence.get("close_vs_sma5"))
+    close_vs_sma10 = _format_pct(opportunity_evidence.get("close_vs_sma10"))
+
+    text = "\n".join(
+        [
+            "Position-aware self-evolution risk control:",
+            (
+                f"- Current position is {current_position:.2f}, but only "
+                f"{positive_signals}/{min_signals} required positive signals are present."
+            ),
+            (
+                "- Recent evidence: stock lookback return "
+                f"{stock_return}, relative return vs benchmark {relative_return}, "
+                f"close vs SMA5 {close_vs_sma5}, close vs SMA10 {close_vs_sma10}."
+            ),
+            (
+                "- Treat Hold as an active decision to keep risk, not as neutral. "
+                "If the current reports do not name concrete stock-specific upside evidence, "
+                "explicitly evaluate Underweight/Sell to reduce exposure to cash."
+            ),
+            (
+                "- Do not let an anti-cash-drag opportunity skill keep a long position "
+                "after the stock loses its own confirmation."
+            ),
+        ]
+    )
+    return _shorten(text, max_chars)
+
+
 def write_skill_artifacts(
     skills: list[CandidateTradingSkill],
     output_dir: Path,
@@ -353,7 +401,7 @@ def _passes_runtime_opportunity_gate(
     skill_type = _clean_value(skill.get("skill_type")).lower()
     if skill_type != "opportunity" or not opportunity_evidence:
         return True
-    if not bool(opportunity_evidence.get("enabled")):
+    if not bool(opportunity_evidence.get("opportunity_gate_enabled")):
         return True
 
     if not bool(opportunity_evidence.get("allow_opportunity")):
