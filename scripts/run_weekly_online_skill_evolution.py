@@ -346,6 +346,17 @@ def write_manifest(output_dir: Path, records: list[dict[str, Any]]) -> None:
     )
 
 
+def load_manifest_records(output_dir: Path) -> list[dict[str, Any]]:
+    path = output_dir / "_weekly_evolution" / "weekly_manifest.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    records = data.get("records", [])
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, dict)]
+
+
 def _json_clean(row: dict[str, str]) -> dict[str, Any]:
     cleaned: dict[str, Any] = {}
     for key, value in row.items():
@@ -400,7 +411,12 @@ def main() -> int:
     if args.dry_run:
         print("Dry-run only; no files will be modified and no LLM calls will be made.")
 
-    records: list[dict[str, Any]] = []
+    records: list[dict[str, Any]] = [] if args.dry_run else load_manifest_records(output_dir)
+    completed_week_keys = {
+        str(record.get("week_key"))
+        for record in records
+        if record.get("status") == "ok"
+    }
     if not args.dry_run:
         seeded = seed_output_from_baseline(
             baseline_dir=baseline_dir,
@@ -413,6 +429,9 @@ def main() -> int:
         print("Initialized active skills:", copied)
 
     for window in windows:
+        if window.week_key in completed_week_keys:
+            print(f"[skip-week] {window.week_key} already completed")
+            continue
         week_dir = evolution_dir / f"week_{window.week_index:02d}_{window.week_key}"
         log_path = week_dir / "weekly_online.log"
         record = asdict(window)

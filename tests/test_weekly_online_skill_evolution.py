@@ -119,3 +119,26 @@ def test_copy_initial_skill_library_is_resume_safe(tmp_path):
     active.write_text('{"skill_id":"existing"}\n', encoding="utf-8")
     assert not weekly.copy_initial_skill_library(initial, active)
     assert "existing" in active.read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+def test_load_manifest_records_for_resume(tmp_path):
+    output = tmp_path / "online"
+    manifest_dir = output / "_weekly_evolution"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "weekly_manifest.json").write_text(
+        json.dumps(
+            {
+                "experiment": "weekly_online_skill_evolution",
+                "records": [
+                    {"week_key": "2026-W19", "status": "ok"},
+                    {"week_key": "2026-W20", "status": "failed:backtest"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    records = weekly.load_manifest_records(output)
+
+    assert [record["week_key"] for record in records] == ["2026-W19", "2026-W20"]
