@@ -149,6 +149,7 @@ activemq-data/
 
 # Environments
 .env
+.env.*
 .envrc
 .venv
 env/
@@ -217,8 +218,18 @@ __marimo__/
 
 # Cache
 **/data_cache/
+artifacts/
+outputs/
+worklog/
 
 # Enterprise env file (secrets) and local research artifacts
-.env.enterprise
 reports/
 results/
+
+# Credentials and local-only secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.secret
+.secrets/

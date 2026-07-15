@@ -1,6 +1,7 @@
 .git
 .venv
 .env
+.env.*
 .claude
 .idea
 .vscode
@@ -9,7 +10,16 @@ __pycache__
 *.egg-info
 build
 dist
+artifacts
+outputs
+reports
 results
 eval_results
+worklog
+*.pem
+*.key
+*.p12
+*.pfx
+*.secret
 Dockerfile
 docker-compose.yml
