@@ -3,24 +3,21 @@
 Self-Evolution Skill TradingAgents is a research-oriented multi-agent trading
 framework for China A-share experiments. It extends the TradingAgents workflow
 with a skill-evolution layer that converts completed trading episodes into
-structured trading skills, verifies them, and injects accepted skills back into
-future agent runs.
+structured skills, verifies them, and injects accepted skills into future agent
+runs.
 
-The repository is maintained as source code only. Generated artifacts and local
-credential files are intentionally excluded from version control.
+The public repository contains the runnable framework, experiment orchestration
+scripts, tests, and project configuration needed to reproduce the workflows.
 
 ## Features
 
 - Multi-agent trading workflow with analyst, researcher, trader, risk, and
   portfolio-management roles.
-- China A-share data routing with market data validation and safe symbol
-  handling.
-- Continuous backtesting scripts for daily decision replay over a fixed window.
-- Skill-evolution modules for experience extraction, candidate skill generation,
-  and verifier-gated skill acceptance.
-- Walk-forward and weekly online orchestration scripts for no-lookahead
-  evaluation.
-- CI coverage across Python 3.10, 3.11, 3.12, and 3.13, with strict Ruff linting.
+- China A-share data routing with market validation and safe symbol handling.
+- Daily continuous backtesting for A-share portfolios.
+- Skill extraction, synthesis, filtering, and verifier-gated acceptance.
+- Fixed train/validation/test walk-forward workflow.
+- Weekly online skill-evolution controller for no-lookahead iteration.
 
 ## Repository Layout
 
@@ -35,7 +32,7 @@ credential files are intentionally excluded from version control.
 
 ## Installation
 
-Use Python 3.10 or newer. Python 3.12 is recommended for local development.
+Use Python 3.10 or newer. Python 3.12 is recommended.
 
 ```powershell
 conda create -n tradingagents python=3.12
@@ -43,7 +40,7 @@ conda activate tradingagents
 pip install -e ".[dev]"
 ```
 
-For a clean runtime install without development tools:
+For a runtime-only install:
 
 ```powershell
 pip install .
@@ -51,25 +48,35 @@ pip install .
 
 ## Configuration
 
-Configure model and data-provider credentials through your shell, operating
-system secret store, or CI secret manager. Do not commit local credential files.
+Set the credentials required by your selected model and data providers in the
+local shell or runtime environment before launching an LLM workflow.
 
-For A-share workflows that should avoid noisy US-oriented sources, set:
+For the A-share experiment commands below:
 
 ```powershell
+$env:PYTHONPATH = (Get-Location).Path
 $env:TRADINGAGENTS_ENABLE_PREDICTION_MARKETS = "false"
 $env:TRADINGAGENTS_ENABLE_US_SOCIAL_SOURCES = "false"
 ```
 
-## Quick Start
-
-Run the interactive CLI:
+## Interactive CLI
 
 ```powershell
 tradingagents
 ```
 
-Run an A-share continuous workflow:
+## Experiment Reproduction
+
+The commands below use three A-share tickers:
+
+- `600519.SS`: Kweichow Moutai
+- `000333.SZ`: Midea Group
+- `600036.SS`: China Merchants Bank
+
+### 1. Baseline Agent
+
+This run evaluates the original multi-agent workflow without skill injection
+over the 2026 Q2 window.
 
 ```powershell
 python scripts\run_continuous_backtest_ashare.py `
@@ -83,17 +90,50 @@ python scripts\run_continuous_backtest_ashare.py `
   --decision-source pm-rating `
   --memory-mode experiment `
   --memory-holding-days 5 `
-  --output-dir artifacts\runs\ashare_q2_baseline `
+  --output-dir artifacts\ashare_q2_baseline `
   --disable-prediction-markets `
   --disable-us-social-sources
+
+python scripts\evaluate_continuous_backtest_baselines.py `
+  --output-dir artifacts\ashare_q2_baseline
 ```
 
-Run the weekly online skill-evolution controller:
+### 2. Final Walk-Forward Skill Agent
+
+This is the main self-evolution pipeline. It uses April decisions to build
+experiences and candidate skills, validates the skill set in May, verifies
+accepted skills, tests them in June, and stitches the full Q2 walk-forward
+portfolio.
+
+```powershell
+python scripts\run_walkforward_skill_split.py `
+  --baseline-dir artifacts\ashare_q2_baseline `
+  --work-root artifacts\walkforward_q2 `
+  --final-dir artifacts\walkforward_q2_best_skill_agent `
+  --tickers 600519.SS,000333.SZ,600036.SS `
+  --analysts market,fundamentals `
+  --llm-provider deepseek `
+  --quick-model deepseek-v4-flash `
+  --deep-model deepseek-v4-flash `
+  --decision-source pm-rating `
+  --memory-mode experiment `
+  --memory-holding-days 5 `
+  --evolution-skill-max-skills 3 `
+  --evolution-skill-max-chars 1800 `
+  --evolution-skill-types opportunity,promote `
+  --gate-preset research
+```
+
+### 3. Weekly Online Skill Evolution
+
+This supplementary workflow updates or rejects the active skill library after
+each completed weekly window.
 
 ```powershell
 python scripts\run_weekly_online_skill_evolution.py `
-  --baseline-dir artifacts\runs\ashare_q2_baseline `
-  --output-dir artifacts\runs\weekly_skill_evolution `
+  --baseline-dir artifacts\ashare_q2_baseline `
+  --output-dir artifacts\weekly_online_skill_agent `
+  --initial-skills-jsonl artifacts\walkforward_q2\train_2026_04_skills\candidate_skills.jsonl `
   --tickers 600519.SS,000333.SZ,600036.SS `
   --global-start-date 2026-04-01 `
   --online-start-date 2026-05-01 `
@@ -102,45 +142,21 @@ python scripts\run_weekly_online_skill_evolution.py `
   --llm-provider deepseek `
   --quick-model deepseek-v4-flash `
   --deep-model deepseek-v4-flash `
+  --decision-source pm-rating `
+  --memory-mode experiment `
+  --memory-holding-days 5 `
+  --evolution-skill-max-skills 3 `
+  --evolution-skill-max-chars 1800 `
   --evolution-skill-types opportunity,promote `
+  --gate-preset research `
   --disable-prediction-markets `
   --disable-us-social-sources
 ```
 
-## Development
+## Notes
 
-Run linting:
-
-```powershell
-ruff check .
-```
-
-Run the test suite:
-
-```powershell
-python -m pytest
-```
-
-Run the focused self-evolution checks:
-
-```powershell
-python -m pytest `
-  tests\test_evolution_skills.py `
-  tests\test_evolution_experience.py `
-  tests\test_evolution_verifier.py `
-  tests\test_continuous_ashare_backtest.py
-```
-
-## Security And Repository Hygiene
-
-- Keep credentials in local shell configuration or a secret manager.
-- Generated artifacts are ignored by Git.
-- Cache folders, logs, archives, local databases, and credential files are not
-  part of the public source tree.
-- Before publishing, run `ruff check .`, `python -m pytest`, and a credential
-  scan on tracked files.
-
-## Disclaimer
+LLM-driven trading experiments are not fully deterministic. Outcomes may vary
+with model sampling, provider behavior, data availability, and vendor updates.
 
 This project is for research and engineering evaluation only. It is not
 financial, investment, or trading advice.
