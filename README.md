@@ -161,6 +161,20 @@ with model sampling, provider behavior, data availability, and vendor updates.
 This project is for research and engineering evaluation only. It is not
 financial, investment, or trading advice.
 
+## Acknowledgements
+
+This project builds on the multi-agent trading workflow introduced by
+[TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents).
+The agent roles, trading workflow structure, and original baseline design are
+the foundation for this research implementation.
+
+The China A-share adaptation also references
+[hsliuping/TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN),
+especially its China-market localization ideas and enhancements for A-share
+data sources, market conventions, and practical trading workflows. This
+repository reworks those ideas in the context of a self-evolving skill-based
+TradingAgents research pipeline.
+
 ## License
 
 This project is distributed under the Apache License 2.0. See `LICENSE` for
