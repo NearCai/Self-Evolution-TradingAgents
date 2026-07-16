@@ -221,6 +221,7 @@ __marimo__/
 artifacts/
 outputs/
 worklog/
+tmp/
 
 # Enterprise env file (secrets) and local research artifacts
 reports/
